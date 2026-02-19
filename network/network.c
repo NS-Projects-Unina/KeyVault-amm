@@ -3,12 +3,10 @@
 #include <string.h> // String handling library
 #include <unistd.h> // POSIX API for Unix-based systems
 
-
 //Per le primitive di rete (socket, bind, listen, accept) e le strutture dati (sockaddr_in)  
 #include <sys/socket.h> // Socket definitions
 #include <arpa/inet.h> // Definitions for internet operations
 #include "network.h" // Include the header file for network functions
-
 
 // ==========================================
 //              FUNZIONI COMUNI

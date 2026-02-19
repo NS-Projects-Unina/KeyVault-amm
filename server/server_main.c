@@ -4,6 +4,18 @@
 
 int main(){
     printf("Starting server...\n");
+    printf("=======================================\n");
+    printf("    KEY-VAULT: TEST PKI (SERVER)       \n");
+    printf("=======================================\n");
+
+    printf("[*] Avvio procedura di auto-provisioning...\n");
+    
+    // Crea la cartella certs/, la CA e il certificato del server
+    setup_server_infrastructure();
+
+    printf("\n[+] Test PKI Server completato!\n");
+    printf("[*] Controlla la cartella 'certs/' per vedere i file generati.\n");
+
     int server_socket_fd = create_tcp_socket(); // Create a server socket on port
     
     if (server_socket_fd < 0) {
@@ -27,6 +39,7 @@ int main(){
         close_socket(server_socket_fd);
         return 1;
     }
+    printf("Server is listening on port 8080...\n");
     
     int client_socket_fd = accept_client(server_socket_fd);
     if (client_socket_fd < 0) {
@@ -35,5 +48,9 @@ int main(){
         return 1;
     }
     printf("Client connected successfully!\n");
+    while(1){
+
+    }
+    return 0;
 
 }
