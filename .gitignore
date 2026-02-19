@@ -1,0 +1,12 @@
+# Ignora l'intera cartella dei certificati
+certs/
+
+# Nel caso avessi file sparsi (per sicurezza extra)
+*.key
+*.crt
+*.csr
+*.srl
+
+# Ignora anche i file compilati (gli eseguibili)
+server_app
+client_app
