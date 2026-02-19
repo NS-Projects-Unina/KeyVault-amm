@@ -1,50 +1,78 @@
-#include "network.h" // Includi l'header con le funzioni di rete
-#include <stdio.h>   // Input/Output standard
-#include "pki.h" // Includiamo la nostra PKI
+#include "network.h"
+#include "ssl.h" // Aggiunto per le funzioni TLS
+#include "pki.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 int main() {
     printf("Starting client...\n");
-
     printf("=======================================\n");
-    printf("    KEY-VAULT: TEST PKI (CLIENT)       \n");
+    printf("    KEY-VAULT: mTLS CLIENT             \n");
     printf("=======================================\n");
 
-    // Simuliamo l'input che arriverà dalla GUI
+    // 1. PKI - Generazione identità (Simulazione GUI)
     const char *username = "giuseppe";
+    char cert_path[256], key_path[256];
+    
+    // Prepariamo i percorsi ai file generati
+    snprintf(cert_path, sizeof(cert_path), "certs/%s.crt", username);
+    snprintf(key_path, sizeof(key_path), "certs/%s.key", username);
 
-    printf("[*] Richiesta certificato per l'utente: %s\n", username);
-
-    // Genera chiave, CSR e certificato firmato dalla CA per "giuseppe"
     if (generate_client_certificate(username) < 0) {
         printf("\n[-] Errore durante la generazione della PKI Client.\n");
         return 1;
     }
 
-    printf("\n[+] Test PKI Client completato con successo!\n");
-    printf("[*] Controlla la cartella 'certs/' per vedere i file generati.\n");
+    // 2. SSL - Inizializzazione Contesto
+    init_openssl();
+    // Il client carica il SUO certificato, la SUA chiave e la CA per verificare il server
+    SSL_CTX *ctx = create_client_ctx(cert_path, key_path, "certs/ca.crt");
+    if (!ctx) {
+        fprintf(stderr, "Failed to create SSL context\n");
+        return 1;
+    }
 
-    // 1. Creazione della socket del client
+    // 3. NETWORK - Connessione TCP (Livello 1)
     int client_socket_fd = create_tcp_socket(); 
     if (client_socket_fd < 0) {
         fprintf(stderr, "Failed to create client socket\n");
         return 1;
     }
 
-    // 2. Connessione al Server
     printf("Attempting to connect to server at 127.0.0.1:8080...\n");
-    
-    // Funzione della  libreria per avviare il Three-Way Handshake
-    int connect_result = connect_to_server(client_socket_fd, "127.0.0.1", 8080);
-    
-    if (connect_result < 0) {
+    if (connect_to_server(client_socket_fd, "127.0.0.1", 8080) < 0) {
         fprintf(stderr, "Failed to connect to the server\n");
-        close_socket(client_socket_fd); // Chiudiamo in caso di errore
+        close_socket(client_socket_fd);
         return 1;
     }
+    printf("TCP Connection established. Starting TLS Handshake...\n");
 
-    printf("Connected to server successfully!\n");
-    while(1){
+    // 4. SSL - Handshake mTLS (Il "Ponte")
+    // Qui il client invia il certificato di 'giuseppe' e verifica quello del server
+    SSL *ssl = connect_tls_to_server(ctx, client_socket_fd);
+    
+    if (ssl) {
+        printf("\n[!!!] CONNESSO AL VAULT IN MODO SICURO [!!!]\n");
+        printf("Identità verificata come: %s\n\n", username);
 
+        // --- Qui andrà il ciclo di comunicazione (Livello 3) ---
+        // Esempio: SSL_write(ssl, "HELLO SERVER", 12);
+
+        while(1) {
+            // Ciclo di invio comandi/password
+        }
+
+        // Chiusura sicura
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+    } else {
+        fprintf(stderr, "[-] TLS Handshake failed. Server not trusted or Client cert rejected.\n");
     }
+
+    // 5. CLEANUP
+    close_socket(client_socket_fd);
+    SSL_CTX_free(ctx);
+    cleanup_openssl();
+
     return 0;
 }
