@@ -1,0 +1,16 @@
+#ifndef CLIENT_SERVICE_H
+#define CLIENT_SERVICE_H
+
+// Avvia il setup PKI basato sull'utente di sistema e stabilisce l'mTLS
+int client_service_init_session();
+
+// Invia una credenziale al server
+void client_service_store_data(const char *service_name, const char *password);
+
+// Richiede tutte le credenziali dal server
+void client_service_fetch_data();
+
+// Pulisce memoria, chiude socket e spegne il tunnel SSL
+void client_service_close_session();
+
+#endif
