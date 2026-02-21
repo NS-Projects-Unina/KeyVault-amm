@@ -44,28 +44,44 @@ SSL_CTX *create_server_ctx(const char *cert_file, const char *key_file, const ch
         exit(EXIT_FAILURE);
     }
 
-    // 3. mTLS: Forza il client a presentare il certificato
-    // SSL_VERIFY_FAIL_IF_NO_PEER_CERT fa cadere la connessione se il client è sprovvisto di cert.
-    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT, NULL);
-    //Così durante l'handshake il server invierà CertificateRequest al client, chiedendo di presentare il proprio certificato per l'autenticazione.
-    //Se il client risponde con no_certificate allora OpenSSL interrompe l'handshake e invia un Alert
+    /* SETTING CRUCIALE
+     * Chiediamo il certificato (SSL_VERIFY_PEER), ma NON forziamo il fallimento 
+     * se manca (NON mettiamo SSL_VERIFY_FAIL_IF_NO_PEER_CERT).
+     * Questo permette ad un nuovo client "nuovo" di entrare per fare l'ENROLL.
+     */
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
 
-    printf("[+] Contesto SSL Server (mTLS) configurato con successo.\n");
     return ctx;
 }
 
-/* ========================================================================= *
- * CONTESTO CLIENT (Presenta il proprio certificato)                         *
- * ========================================================================= */
-SSL_CTX *create_client_ctx(const char *cert_file, const char *key_file, const char *ca_file) {
-    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
-    //Configuriamo il client per usare TLS in modalità negoziazione, ovvero a iniziare l'handshake TLS.
-    if (!ctx) {
-        perror("[-] Impossibile creare il contesto SSL Client");
-        exit(EXIT_FAILURE);
-    }
 
-    // 1. Carichiamo l'identità del Client (es. giuseppe.crt e giuseppe.key)
+/* ========================================================================= *
+ *                CONTESTO CLIENT: DUE LIVELLI DI SICUREZZA                  *
+ * ========================================================================= */
+
+// LIVELLO 1: TLS Semplice (Usato per ENROLLMENT)
+// Verifica solo che il Server sia autentico, ma non presenta identità propria.
+SSL_CTX *create_client_basic_ctx(const char *ca_file) {
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method());
+    if (!ctx) return NULL;
+
+    // Carica solo la CA per verificare il certificato del Server
+    if (SSL_CTX_load_verify_locations(ctx, ca_file, NULL) <= 0) return NULL;
+
+    // Chiediamo di verificare il server
+    SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
+    
+    printf("[*] Contesto Client BASIC (Solo verifica Server) pronto.\n");
+    return ctx;
+}
+
+// LIVELLO 2: mTLS Completo (Usato per VAULT)
+// Richiede obbligatoriamente cert e key dell'utente
+SSL_CTX *create_client_mtls_ctx(const char *cert_file, const char *key_file, const char *ca_file) {
+    SSL_CTX *ctx = SSL_CTX_new(TLS_client_method()); //Creazione del contesto TLS per il client, che useremo per stabilire la connessione mTLS con il server.
+    if (!ctx) return NULL; //Se non riesce a creare il contesto, ritorna NULL per segnalare l'errore.
+
+    // Carichiamo l'identità del Client (es. giuseppe.crt e giuseppe.key)
     SSL_CTX_use_certificate_file(ctx, cert_file, SSL_FILETYPE_PEM);
     SSL_CTX_use_PrivateKey_file(ctx, key_file, SSL_FILETYPE_PEM);
     if (!SSL_CTX_check_private_key(ctx)) {
@@ -73,16 +89,11 @@ SSL_CTX *create_client_ctx(const char *cert_file, const char *key_file, const ch
         exit(EXIT_FAILURE);
     }
 
-    // 2. Carichiamo la Root CA (per verificare che il server sia autentico)
-    if (SSL_CTX_load_verify_locations(ctx, ca_file, NULL) <= 0) {
-        fprintf(stderr, "[-] Errore nel caricamento della Root CA nel Client.\n");
-        exit(EXIT_FAILURE);
-    }
+    if (SSL_CTX_load_verify_locations(ctx, ca_file, NULL) <= 0) return NULL;
 
-    // 3. Diciamo al client di verificare obbligatoriamente il server
+    // Diciamo al client di verificare obbligatoriamente il server
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
-
-    printf("[+] Contesto SSL Client (mTLS) configurato con successo.\n");
+    printf("[+] Contesto Client mTLS (Identità Digitale) pronto.\n");
     return ctx;
 }
 
@@ -90,24 +101,27 @@ SSL_CTX *create_client_ctx(const char *cert_file, const char *key_file, const ch
  *                      FUNZIONI DI CONNESSIONE 
  * ========================================================================= */
 SSL *accept_tls_connection(SSL_CTX *ctx, int client_fd) {
-    //Verrà chiamata dal server subito dopo che la socket TCP ha accettato la connessione del client.
-    SSL *ssl = SSL_new(ctx);    //Oggetto Session TLS specifico per quel client singolo.
-    SSL_set_fd(ssl, client_fd); //Colleghiamo la socket TCP del client al contesto SSL, così OpenSSL sa da quale socket leggere e scrivere i dati TLS criptati.
-    printf("[*] Avvio dell'handshake TLS (in attesa del certificato client)...\n");
+    SSL *ssl = SSL_new(ctx);
+    SSL_set_fd(ssl, client_fd);
+    
+    printf("[*] Inizio negoziazione TLS (Porta Ibrida mTLS/Enrollment)...\n");
 
-
-    /*
-     *  Il server riceve il ClientHello, invia il proprio certificato e — dato che abbiamo impostato l'mTLS —
-     *  invia una Certificate Request.
-    */
     if (SSL_accept(ssl) <= 0) {
-        //Se il client non invia un certificato valido, o ci sono altri problemi allora deve morire la connessione.
         ERR_print_errors_fp(stderr);
         SSL_free(ssl);
-        //Qua va chiusa anche la socket TCP associata?
         return NULL;
     }
-    printf("[+] Handshake mTLS completato! Client autenticato.\n");
+
+    // --- MODIFICA LOGICA ---
+    // Verifichiamo subito se il client ha presentato un certificato o no
+    X509 *client_cert = SSL_get_peer_certificate(ssl);
+    if (client_cert) {
+        printf("[+] Handshake completato: Connessione mTLS (Autenticata).\n");
+        X509_free(client_cert); // Fondamentale liberare la memoria
+    } else {
+        printf("[!] Handshake completato: Connessione TLS Semplice (Anonima/Enrollment).\n");
+    }
+
     return ssl;
 }
 
@@ -124,4 +138,23 @@ SSL *connect_tls_to_server(SSL_CTX *ctx, int sockfd) {
     }
     printf("[+] Handshake mTLS completato! Server verificato.\n");
     return ssl;
+}
+
+
+// Funzione di utilità per estrarre il Common Name (CN) dal certificato del client, se presente.
+int get_client_common_name(SSL *ssl, char *out_cn, size_t len) {
+    if (!ssl) return -1;
+
+    X509 *cert = SSL_get_peer_certificate(ssl);
+    if (!cert) return 0; // Sessione TLS Semplice (nessun certificato)
+
+    // Estrazione del testo dal campo CN del Subject
+    X509_NAME *subject_name = X509_get_subject_name(cert);
+    if (X509_NAME_get_text_by_NID(subject_name, NID_commonName, out_cn, len) < 0) {
+        X509_free(cert);
+        return -1;
+    }
+
+    X509_free(cert);
+    return 1; // Successo mTLS
 }

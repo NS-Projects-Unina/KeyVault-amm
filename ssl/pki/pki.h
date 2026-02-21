@@ -1,14 +1,17 @@
 #ifndef PKI_H
 #define PKI_H
 
-// Crea la cartella "certs" se non esiste
-void init_pki_directory();
+//Si assicura che la cartella certs/ esista nel filesystem, altrimenti la crea
+//con i permessi 0700 (solo il proprietario può leggere/scrivere/eseguire)
+void init_pki_directory(); 
 
-// Funzione lato SERVER: Crea la Root CA e il certificato del server se non esistono
 void setup_server_infrastructure();
 
-// Funzione CONDIVISA: Genera chiave, CSR e certificato per un nuovo utente (Client)
-// Ritorna 0 in caso di successo, -1 in caso di errore
-int generate_client_certificate(const char *username);
+// Sostituisce la vecchia generate_client_certificate
+int pki_sign_client_request(const char *username);
 
-#endif // PKI_H
+
+//Genera una chiave privata e una CSR (firmata con la chiave privata precedentemente chiesta) per l'utente specificato, salvandole in certs/username.key e certs/username.csr
+int pki_generate_csr(const char *username);
+
+#endif

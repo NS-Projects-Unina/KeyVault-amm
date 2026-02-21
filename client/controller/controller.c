@@ -22,34 +22,55 @@ static void dispatch_service_action(int choice) {
 }
 
 void start_app_controller() {
-    printf("[*] Inizializzazione sessione sicura in corso...\n");
+    printf("[*] Verifica stato identità digitale...\n");
 
-    // 1. Chiediamo al Service di preparare tutto (Certificati, Socket, mTLS)
+    // --- FASE 0: BOOTSTRAP / ENROLLMENT ---
+    // Il Controller del Client chiede al Service se mancano i certificati locali
+    if (client_service_needs_enrollment()) {
+        printf("[!] Nessun certificato trovato per questo utente.\n");
+        printf("[*] Avvio procedura di registrazione (Enrollment)...\n");
+
+        char reg_password[128];
+        printf("Inserisci la Password di Registrazione: ");
+        // Pulizia buffer e lettura password
+        if (scanf("%127s", reg_password) != 1) return;
+
+        // Ordiniamo al Service di generare la CSR e scambiarla col Server
+        if (client_service_perform_enrollment(reg_password) != 0) {
+            fprintf(stderr, "[-] Errore: Registrazione fallita. Impossibile ottenere il certificato.\n");
+            return;
+        }
+        printf("[+] Registrazione completata con successo! Certificato salvato.\n");
+    }
+
+    // --- FASE 1: INIZIALIZZAZIONE SESSIONE mTLS ---
+    // Ora siamo certi che il certificato esista (o era già lì o lo abbiamo appena creato)
     if (client_service_init_session() != 0) {
-        fprintf(stderr, "[-] Errore fatale: Impossibile stabilire la connessione col server.\n");
+        fprintf(stderr, "[-] Errore fatale: Impossibile stabilire la connessione mTLS.\n");
         return;
     }
 
-    printf("[+] Connessione stabilita con successo!\n");
+    printf("[+] Connessione mTLS stabilita con successo!\n");
 
-    // 2. Loop dell'interfaccia utente
+    // --- FASE 2: LOOP DELL'INTERFACCIA UTENTE ---
     int choice;
     while (1) {
         printf("\n--- MENU VAULT ---\n");
         printf("1. Salva nuova password\n");
+        printf("2. Recupera il tuo Vault\n"); // Aggiunto per completezza
         printf("3. Esci\n");
         printf("Scelta: ");
         
         if (scanf("%d", &choice) != 1) break;
 
         if (choice == 3) {
-            printf("[*] Chiusura in corso...\n");
+            printf("[*] Chiusura sessione in corso...\n");
             break;
         }
 
         dispatch_service_action(choice);
     }
 
-    // 3. Chiusura pulita tramite il Service
+    // --- FASE 3: CLEANUP ---
     client_service_close_session();
 }

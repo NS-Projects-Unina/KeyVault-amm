@@ -1,6 +1,12 @@
 #ifndef CLIENT_SERVICE_H
 #define CLIENT_SERVICE_H
 
+int client_service_perform_enrollment(const char *reg_pass);
+
+// Controlla fisicamente se nella cartella /certs esiste un file .crt con il nome dell'utente di sistema.
+int client_service_needs_enrollment();
+
+
 // Avvia il setup PKI basato sull'utente di sistema e stabilisce l'mTLS
 int client_service_init_session();
 
@@ -12,5 +18,6 @@ void client_service_fetch_data();
 
 // Pulisce memoria, chiude socket e spegne il tunnel SSL
 void client_service_close_session();
+
 
 #endif

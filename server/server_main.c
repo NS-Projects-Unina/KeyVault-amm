@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 int main() {
+    
     printf("=== [KEY-VAULT SERVER BOOT] ===\n");
 
     // Passiamo il controllo al Controller, che avvierà l'intero sistema
