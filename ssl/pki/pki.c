@@ -30,40 +30,7 @@ void setup_server_infrastructure() {
     printf("[+] Infrastruttura Server completata con successo!\n");
 }
 
-/* ========================================================================= *
- * NUOVA FUNZIONE: Firma la CSR del Client                                   *
- * ========================================================================= */
-int pki_sign_client_request(const char *username) {
-    char command[512];
 
-    // Verifica che il server possieda la chiave privata della CA
-    if (access("certs/ca.key", F_OK) == -1) {
-        fprintf(stderr, "[-] Errore Fatale: Root CA non trovata sul server.\n");
-        return -1;
-    }
-
-    printf("[*] PKI: Ricevuta richiesta CSR. Avvio procedura di firma per '%s'...\n", username);
-
-    // Firma la CSR usando ca.crt e ca.key
-    snprintf(command, sizeof(command), 
-             "openssl x509 -req -in certs/%s.csr -CA certs/ca.crt -CAkey certs/ca.key "
-             "-CAcreateserial -out certs/%s.crt -days 365 2>/dev/null", 
-             username, username);
-    
-    int res = system(command);
-
-    // Pulizia: la CSR del client non ci serve più sul server una volta firmata
-    snprintf(command, sizeof(command), "rm -f certs/%s.csr", username);
-    system(command);
-
-    if (res == 0) {
-        printf("[+] PKI: Certificato '%s.crt' generato e firmato con successo!\n", username);
-        return 0;
-    } else {
-        fprintf(stderr, "[-] PKI: Errore durante la generazione del certificato.\n");
-        return -1;
-    }
-}
 
 int pki_generate_csr(const char *username) {
     char command[512];
@@ -84,5 +51,43 @@ int pki_generate_csr(const char *username) {
         -subj -> specifica i campi del subject della CSR, solo CN (Common Name).
     */
 
+    //CSR composta da: chiave pubblica, informazioni Subject (CN=username), e firma digitale con la chiave privata del client (certs/username.key)
+    //Quando il server riceverà questa CSR, potrà verificarne l'autenticità usando la chiave pubblica contenuta nella CSR stessa, e poi firmarla con la CA se tutto è in regola.
+
+
     return system(command);
+}
+
+
+int pki_sign_client_request(const char *identifier) {
+    // Identifier è il FINGERPRINT della chiave pubblica del client, usato come nome univoco per i file .csr e .crt
+    // I file che verranno creati saranno certs/identifier.csr e certs/identifier.crt, che rimarranno così sul server.
+    char command[512];
+
+    // Verifica che il server possieda la chiave privata della CA
+    if (access("certs/ca.key", F_OK) == -1) {
+        fprintf(stderr, "[-] Errore Fatale: Root CA non trovata sul server.\n");
+        return -1;
+    }
+
+    printf("[*] PKI: Ricevuta richiesta CSR. Avvio procedura di firma per '%s'...\n", identifier);
+    // Firma la CSR usando ca.crt e ca.key
+    snprintf(command, sizeof(command), 
+             "openssl x509 -req -in certs/%s.csr -CA certs/ca.crt -CAkey certs/ca.key "
+             "-CAcreateserial -out certs/%s.crt -days 365 2>/dev/null", 
+             identifier, identifier);
+    
+    int res = system(command);
+
+    // Pulizia: la CSR del client non ci serve più sul server una volta firmata
+    snprintf(command, sizeof(command), "rm -f certs/%s.csr", identifier);
+    system(command);
+
+    if (res == 0) {
+        printf("[+] PKI: Certificato '%s.crt' generato e firmato con successo!\n", identifier);
+        return 0;
+    } else {
+        fprintf(stderr, "[-] PKI: Errore durante la generazione del certificato.\n");
+        return -1;
+    }
 }

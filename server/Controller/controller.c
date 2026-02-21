@@ -15,101 +15,96 @@ static void send_response(const char *status, const char *message) {
  * GESTIONE SESSIONE ANONIMA (Solo per Registrazione)                        *
  * ========================================================================= */
 static void handle_enrollment_session() {
-    char buffer[8192]; // Buffer capiente per contenere la CSR
-    
-    printf("[*] Controller: Connessione anonima, in attesa del comando ENROLL...\n");
-
+    char buffer[1024]; 
     int bytes = vault_service_read_data(buffer, sizeof(buffer) - 1);
-    if (bytes <= 0) return; // Client disconnesso senza dire nulla
+    if (bytes <= 0) return;
+    buffer[bytes] = '\0'; 
 
-    char *temp_buf = strdup(buffer);
-    char *cmd = strtok(temp_buf, "|");
-
-    if (cmd && strcmp(cmd, "ENROLL") == 0) {
+    char *cmd = strtok(buffer, "|");
+    
+    // --- NUOVA LOGICA: FASE DI RICHIESTA ---
+    if (cmd && strcmp(cmd, "REQUEST_ENROLL") == 0) {
         char *user = strtok(NULL, "|");
-        char *pass = strtok(NULL, "|");
-        // Passando la stringa vuota "", strtok prende tutto il resto (che è la CSR)
-        char *csr = strtok(NULL, ""); 
-
-        if (user && pass && csr) {
-            printf("[*] Controller: Richiesta di Enrollment ricevuta per l'utente: %s\n", user);
+        if (user) {
+            char otp[9]; // Codice da 8 caratteri
+            generate_random_otp(otp, sizeof(otp));
             
-            // Il Service si occupa di validare la password, salvare il file e firmarlo
-            if (vault_service_process_enrollment(user, pass, csr) == 0) {
-                printf("[+] Controller: Certificato generato e inviato a %s.\n", user);
+            // Usiamo la funzione DAL che hai appena aggiunto
+            if (dal_save_pending_request(user, otp) == 0) {
+                printf("\n[!!!] ADMIN: Richiesta da '%s'. OTP generato: %s\n", user, otp);
+                vault_service_send_data("OK|Richiesta inviata. Attendi l'OTP dall'amministratore.");
             } else {
-                printf("[-] Controller: Registrazione fallita per %s.\n", user);
+                vault_service_send_data("ERROR|Richiesta già presente o errore database.");
             }
-        } else {
-            printf("[-] Controller: Comando ENROLL malformato.\n");
-            send_response("ERROR", "Parametri di registrazione mancanti o malformati");
         }
-    } else {
-        send_response("ERROR", "Accesso negato. Usa il comando ENROLL per registrarti.");
+        return;
     }
 
-    free(temp_buf);
+    // --- LOGICA ESISTENTE: FASE DI ENROLLMENT FINALE ---
+    if (cmd && strcmp(cmd, "ENROLL") == 0) {
+        char *user = strtok(NULL, "|");
+        char *otp = strtok(NULL, "|");
+        char *csr = strtok(NULL, ""); 
+
+        if (user && otp && csr) {
+            if (vault_service_process_enrollment(user, otp, csr) == 0) {
+                printf("[+] Enrollment completato per %s.\n", user);
+            } else {
+                vault_service_send_data("ERROR|OTP errato o scaduto.");
+            }
+        }
+    }
 }
 
 /* ========================================================================= *
  * GESTIONE SESSIONE AUTENTICATA (mTLS - Accesso al Vault)                   *
  * ========================================================================= */
-static void handle_authenticated_session(const char *identity) {
+static void handle_authenticated_session(const char *fingerprint, const char *username) {
     char buffer[2048]; 
     
-    printf("[+] Controller: Sessione attiva per l'utente certificato: %s\n", identity);
+    // Loggiamo lo username per l'admin, ma usiamo il fingerprint per il Vault
+    printf("[+] Controller: Sessione attiva per l'utente: %s [ID: %.8s...]\n", username, fingerprint);
 
     while (1) {
         memset(buffer, 0, sizeof(buffer));
-        
-        // Lettura dati criptati dal client astratta dal Service
         int bytes = vault_service_read_data(buffer, sizeof(buffer) - 1);
-        if (bytes <= 0) break; // Client disconnesso
+        if (bytes <= 0) break; 
 
-        printf("[*] Controller: Ricevuto comando da %s: %s\n", identity, buffer);
+        // BUG FIX: Terminazione stringa manuale
+        buffer[bytes] = '\0'; 
 
         char *temp_buf = strdup(buffer);
         char *cmd = strtok(temp_buf, "|");
-
-        if (!cmd) {
-            send_response("ERROR", "Protocollo malformato");
-            free(temp_buf);
-            continue;
-        }
+        if (!cmd) { free(temp_buf); continue; }
 
         if (strcmp(cmd, "STORE") == 0) {
             char *svc_name = strtok(NULL, "|");
             char *payload = strtok(NULL, "|");
 
+            //  Passiamo il FINGERPRINT al Service, non più lo username
             if (svc_name && payload) {
-                if (vault_service_save_credential(identity, svc_name, payload) == 0)
-                    send_response("OK", "Credenziale salvata nel vault");
+                if (vault_service_save_credential(fingerprint, svc_name, payload) == 0)
+                    send_response("OK", "Credenziale salvata nel vault univoco");
                 else
                     send_response("ERROR", "Errore di persistenza dati");
-            } else {
-                send_response("ERROR", "Parametri STORE mancanti");
             }
         } 
         else if (strcmp(cmd, "GET_ALL") == 0) {
-            char *data = vault_service_get_all(identity);
+            // NOTA: Recupero dati tramite FINGERPRINT
+            char *data = vault_service_get_all(fingerprint);
             
             if (data && data[0] != '\0') {
-                vault_service_send_data(data); // Invio dati grezzi
+                vault_service_send_data(data);
                 free(data);
             } else {
                 send_response("INFO", "Il tuo vault è vuoto");
                 if (data) free(data);
             }
         }
-        else {
-            send_response("ERROR", "Comando sconosciuto o non autorizzato");
-        }
-
+       
         free(temp_buf);
     }
-    printf("[*] Controller: Sessione terminata per %s\n", identity);
 }
-
 /* ========================================================================= *
  *                  LOOP PRINCIPALE DEL SERVER                               *
  * ========================================================================= */
@@ -121,32 +116,27 @@ int run_server_controller() {
         return -1;
     }
 
+    char fingerprint[65]; // Hash SHA-256
+    char username[256];    // Nome dal certificato
     printf("[+] Server pronto. In attesa di client in modalità Ibrida...\n");
-    char identity[256];
+    
 
     while (1) {
-        memset(identity, 0, sizeof(identity)); // Pulisce il buffer ad ogni iterazione
+        memset(fingerprint, 0, sizeof(fingerprint));
+        memset(username, 0, sizeof(username));
         
-        // Il Service accetta la connessione e ci dice il livello di sicurezza
-        int auth_status = vault_service_accept_client(identity, sizeof(identity));
+        // Il Service accetta un client e determina se è autenticato (mTLS) o anonimo (TLS semplice)
+        int auth_status = vault_service_accept_client(fingerprint, sizeof(fingerprint), username, sizeof(username));
         
         if (auth_status == 1) {
-            // [CASO 1] Il client ha un certificato valido
-            handle_authenticated_session(identity);
+            // Passiamo entrambi alla sessione
+            handle_authenticated_session(fingerprint, username);
         } 
         else if (auth_status == 0) {
-            // [CASO 2] Il client si è connesso in TLS Semplice
             handle_enrollment_session();
-        } 
-        else {
-            // [CASO -1] Errore di rete o di handshake
-            fprintf(stderr, "[-] Connessione fallita o rifiutata.\n");
         }
-
-        // Il Controller ordina la chiusura, il Service esegue la disconnessione sicura
-        vault_service_close_client(); 
+        vault_service_close_client();
     }
-
     vault_service_shutdown();
     return 0;
 }

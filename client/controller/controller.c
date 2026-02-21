@@ -22,25 +22,37 @@ static void dispatch_service_action(int choice) {
 }
 
 void start_app_controller() {
+    
     printf("[*] Verifica stato identità digitale...\n");
 
-    // --- FASE 0: BOOTSTRAP / ENROLLMENT ---
-    // Il Controller del Client chiede al Service se mancano i certificati locali
     if (client_service_needs_enrollment()) {
-        printf("[!] Nessun certificato trovato per questo utente.\n");
-        printf("[*] Avvio procedura di registrazione (Enrollment)...\n");
+        printf("[!] Nessun certificato trovato.\n");
+        const char *user = get_system_user();
 
-        char reg_password[128];
-        printf("Inserisci la Password di Registrazione: ");
-        // Pulizia buffer e lettura password
-        if (scanf("%127s", reg_password) != 1) return;
-
-        // Ordiniamo al Service di generare la CSR e scambiarla col Server
-        if (client_service_perform_enrollment(reg_password) != 0) {
-            fprintf(stderr, "[-] Errore: Registrazione fallita. Impossibile ottenere il certificato.\n");
+        // 1. Fase di Richiesta: Il server genera l'OTP
+        printf("[*] Invio richiesta di accreditamento per: %s\n", user);
+        if (client_service_request_enrollment(user) != 0) {
+            fprintf(stderr, "[-] Errore nella richiesta iniziale.\n");
             return;
         }
-        printf("[+] Registrazione completata con successo! Certificato salvato.\n");
+
+        printf("\n----------------------------------------------------------\n");
+        printf("[?] Richiesta registrata! Ora contatta l'Amministratore.\n");
+        printf("[?] Fatti dare l'OTP per completare l'enrollment.\n");
+        printf("----------------------------------------------------------\n");
+
+        // 2. Fase di Finalizzazione: L'utente inserisce l'OTP
+        char otp[64];
+        printf("\nInserisci l'OTP fornito dall'admin: ");
+        if (scanf("%63s", otp) != 1) return;
+
+        if (client_service_perform_enrollment(user, otp) != 0) {
+            fprintf(stderr, "[-] Registrazione fallita. OTP errato o scaduto.\n");
+            return;
+        }
+        printf("[+] Registrazione completata! Certificato ottenuto.\n");
+    } else {
+        printf("[+] Certificato digitale già presente. Procedo con la connessione mTLS.\n");
     }
 
     // --- FASE 1: INIZIALIZZAZIONE SESSIONE mTLS ---

@@ -2,6 +2,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <openssl/sha.h>
+#include <openssl/evp.h>
+#include <time.h>
+
+
 
 void init_openssl() {
     SSL_library_init(); 
@@ -45,9 +50,10 @@ SSL_CTX *create_server_ctx(const char *cert_file, const char *key_file, const ch
     }
 
     /* SETTING CRUCIALE
-     * Chiediamo il certificato (SSL_VERIFY_PEER), ma NON forziamo il fallimento 
-     * se manca (NON mettiamo SSL_VERIFY_FAIL_IF_NO_PEER_CERT).
-     * Questo permette ad un nuovo client "nuovo" di entrare per fare l'ENROLL.
+     * Server chiede il certificato (SSL_VERIFY_PEER), ma NON forziamo il fallimento.
+     * per cui se il client lo manda, allora siamo in mTLS e OpenSSL lo verificherà usando la CA.
+     * Se manca (NON mettiamo SSL_VERIFY_FAIL_IF_NO_PEER_CERT).
+     * Questo permette ad un nuovo client di entrare per fare l'ENROLL.
      */
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
 
@@ -111,17 +117,7 @@ SSL *accept_tls_connection(SSL_CTX *ctx, int client_fd) {
         SSL_free(ssl);
         return NULL;
     }
-
-    // --- MODIFICA LOGICA ---
-    // Verifichiamo subito se il client ha presentato un certificato o no
-    X509 *client_cert = SSL_get_peer_certificate(ssl);
-    if (client_cert) {
-        printf("[+] Handshake completato: Connessione mTLS (Autenticata).\n");
-        X509_free(client_cert); // Fondamentale liberare la memoria
-    } else {
-        printf("[!] Handshake completato: Connessione TLS Semplice (Anonima/Enrollment).\n");
-    }
-
+    printf("[+] Negoziazione TLS completata.\n");
     return ssl;
 }
 
@@ -141,20 +137,100 @@ SSL *connect_tls_to_server(SSL_CTX *ctx, int sockfd) {
 }
 
 
-// Funzione di utilità per estrarre il Common Name (CN) dal certificato del client, se presente.
-int get_client_common_name(SSL *ssl, char *out_cn, size_t len) {
+
+/*
+    GESTIONE CERTIFICATI E IDENTITÀ
+    Queste funzioni permettono di estrarre informazioni dai certificati presentati durante l'handshake TLS, come il Common Name (CN) 
+    e il fingerprint della chiave pubblica,
+    che sono utili per identificare univocamente il client e verificare la sua identità.
+*/
+
+// Estrae il certificato, se presente, e ne ricava sia il Common Name (CN) che il fingerprint della chiave pubblica.
+int get_client_full_identity(SSL *ssl, char *out_cn, size_t cn_len, char *out_fingerprint, size_t fp_len) {
     if (!ssl) return -1;
 
     X509 *cert = SSL_get_peer_certificate(ssl);
-    if (!cert) return 0; // Sessione TLS Semplice (nessun certificato)
+    if (!cert) return 0; // Nessun certificato -> TLS Semplice (Fase 0)
 
-    // Estrazione del testo dal campo CN del Subject
+    // 1. Estrazione Common Name (CN)
     X509_NAME *subject_name = X509_get_subject_name(cert);
-    if (X509_NAME_get_text_by_NID(subject_name, NID_commonName, out_cn, len) < 0) {
+    if (X509_NAME_get_text_by_NID(subject_name, NID_commonName, out_cn, cn_len) < 0) {
+        X509_free(cert);
+        return -1;
+    }
+
+    // 2. Calcolo Fingerprint (usando la funzione che abbiamo scritto prima)
+    if (get_certificate_fingerprint(cert, out_fingerprint, fp_len) != 0) {
         X509_free(cert);
         return -1;
     }
 
     X509_free(cert);
-    return 1; // Successo mTLS
+    return 1; // Tutto ok, sessione mTLS verificata
+}
+
+
+
+
+// Funzione interna per il calcolo dell'hash (usata da entrambe le pubbliche)
+static int internal_compute_hash(EVP_PKEY *pubkey, char *out_hex, size_t len) {
+    if (!pubkey || len < 65) return -1;
+
+    unsigned char *der = NULL;
+    int der_len = i2d_PUBKEY(pubkey, &der);
+    if (der_len < 0) return -1;
+
+    unsigned char hash[32]; // SHA256_DIGEST_LENGTH
+    SHA256(der, der_len, hash);
+
+    for (int i = 0; i < 32; i++) {
+        sprintf(out_hex + (i * 2), "%02x", hash[i]);
+    }
+    out_hex[64] = '\0';
+
+    if (der) OPENSSL_free(der);
+    return 0;
+}
+
+//Per la fase mtls, estraiamo il fingerprint direttamente dal certificato presentato dal client durante l'handshake TLS.
+int get_certificate_fingerprint(X509 *cert, char *out_hex, size_t len) {
+    if (!cert) return -1;
+    EVP_PKEY *pubkey = X509_get_pubkey(cert); //Prendo la chiave pubblica dal certificato
+    int res = internal_compute_hash(pubkey, out_hex, len); //Calcolo l'hash della Pkey, che diventa il fingerprint univoco del client.
+    if (pubkey) EVP_PKEY_free(pubkey);
+    return res;
+}
+
+
+//Per la fase di Enrollment
+//Il client invia la CSR, il server la converte in X509_REQ, estrae la PKey e calcola il fingerprint (hash chiave pubblica)
+int get_csr_fingerprint(X509_REQ *csr, char *out_hex, size_t len) {
+    if (!csr) return -1;
+    EVP_PKEY *pubkey = X509_REQ_get_pubkey(csr); 
+    //X509_REQ_get_pubkey è una funzione di OpenSSL che estrae la chiave pubblica da una CSR (Certificate Signing Request).
+    int res = internal_compute_hash(pubkey, out_hex, len); //Calcola l'hash della chiave pubblica estratta dalla CSR, che diventerà il fingerprint univoco del client.
+    if (pubkey) EVP_PKEY_free(pubkey);
+    return res;
+}
+
+
+
+//Queste righe sono da spostare in un file di utility
+
+
+void generate_random_otp(char *out, size_t len) {
+    // Escludiamo caratteri ambigui come '0', 'O', '1', 'I'
+    const char charset[] = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; 
+    
+    // Inizializziamo il seed
+    static int seeded = 0;
+    if (!seeded) {
+        srand(time(NULL));
+        seeded = 1;
+    }
+
+    for (size_t i = 0; i < len - 1; i++) {
+        out[i] = charset[rand() % (sizeof(charset) - 1)];
+    }
+    out[len - 1] = '\0';
 }

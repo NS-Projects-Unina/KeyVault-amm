@@ -7,11 +7,10 @@ void init_pki_directory();
 
 void setup_server_infrastructure();
 
-// Sostituisce la vecchia generate_client_certificate
-int pki_sign_client_request(const char *username);
-
-
 //Genera una chiave privata e una CSR (firmata con la chiave privata precedentemente chiesta) per l'utente specificato, salvandole in certs/username.key e certs/username.csr
 int pki_generate_csr(const char *username);
+
+//Firma la CSR generata dal client usando la CA del server.
+int pki_sign_client_request(const char *username);
 
 #endif

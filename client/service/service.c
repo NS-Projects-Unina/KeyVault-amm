@@ -13,7 +13,7 @@ static int active_sockfd = -1;
 
 // --- HELPER INTERNI ---
 
-static const char* get_system_user() {
+const char* get_system_user() {
     struct passwd *pw = getpwuid(getuid());
     return (pw) ? pw->pw_name : "default_user";
 }
@@ -46,56 +46,73 @@ int client_service_needs_enrollment() {
 }
 
 
-//Da modificare e togliere la parte di SSL grezza
-int client_service_perform_enrollment(const char *reg_pass) {
-    const char *user = get_system_user(); 
-    //Valuteremo se cambiare questa funzione per accettare un username specifico, ma per ora ci affidiamo all'utente di sistema.
-    char csr_path[256], cert_path[256], csr_buf[4096], response[4096];
-
-    snprintf(csr_path, sizeof(csr_path), "certs/%s.csr", user);
-    snprintf(cert_path, sizeof(cert_path), "certs/%s.crt", user);
-
-    // 1. PKI: Genera chiave privata-pubblica e CSR localmente
-    if (pki_generate_csr(user) != 0) return -1;
-
-    // 2. Leggi la CSR per spedirla
-    if (load_file_to_buffer(csr_path, csr_buf, sizeof(csr_buf)) != 0) return -1;
-
-    // 3. Connessione temporanea (TLS base, senza certificato client)
+// --- NUOVA FUNZIONE: Richiede l'OTP al server, e poi chiude connessione ---
+int client_service_request_enrollment(const char *user) {
+    char response[1024], command[256];
+    
     init_openssl();
-    SSL_CTX *tmp_ctx = create_client_basic_ctx("certs/ca.crt"); // Nessun cert/key passato
+    SSL_CTX *tmp_ctx = create_client_basic_ctx("certs/ca.crt");
     int tmp_fd = create_tcp_socket();
     if (connect_to_server(tmp_fd, "127.0.0.1", 8080) < 0) return -1;
     SSL *tmp_ssl = connect_tls_to_server(tmp_ctx, tmp_fd);
     if (!tmp_ssl) return -1;
 
-    // 4. Protocollo: ENROLL|user|pass|CSR_CONTENT
-    char command[8192];
-    snprintf(command, sizeof(command), "ENROLL|%s|%s|%s", user, reg_pass, csr_buf);
+    snprintf(command, sizeof(command), "REQUEST_ENROLL|%s", user);
     SSL_write(tmp_ssl, command, strlen(command));
-    printf("[*][Service] CSR inviata al server, in attesa di risposta...\n");
-
-
-    // 5. Ricezione del certificato firmato
-    memset(response, 0, sizeof(response));
-    int bytes = SSL_read(tmp_ssl, response, sizeof(response) - 1);
     
-    if (bytes > 0 && strstr(response, "BEGIN CERTIFICATE")) {
-        save_buffer_to_file(cert_path, response);
-        printf("[+] Certificato ricevuto e salvato.\n");
-    } else {
-        fprintf(stderr, "[-] Il server ha rifiutato l'enrollment: %s\n", response);
-        SSL_free(tmp_ssl);
-        return -1;
-    }
-
-    // Pulizia sessione temporanea
+    memset(response, 0, sizeof(response));
+    SSL_read(tmp_ssl, response, sizeof(response)-1);
+    
+    // Pulizia immediata
     SSL_shutdown(tmp_ssl);
     SSL_free(tmp_ssl);
     SSL_CTX_free(tmp_ctx);
     close(tmp_fd);
-    return 0;
+
+    return (strstr(response, "OK")) ? 0 : -1;
 }
+
+// --- NUOVA FUNZIONE: Enrollment con OTP ---
+int client_service_perform_enrollment(const char *user, const char *otp) {
+    char csr_path[256], cert_path[256], csr_buf[4096], response[8192];
+    snprintf(csr_path, sizeof(csr_path), "certs/%s.csr", user);
+    snprintf(cert_path, sizeof(cert_path), "certs/%s.crt", user);
+
+    // 1. PKI: Generazione locale
+    if (pki_generate_csr(user) != 0) return -1;
+    if (load_file_to_buffer(csr_path, csr_buf, sizeof(csr_buf)) != 0) return -1;
+
+    // 2. Connessione temporanea anonima
+    SSL_CTX *tmp_ctx = create_client_basic_ctx("certs/ca.crt");
+    int tmp_fd = create_tcp_socket();
+    if (connect_to_server(tmp_fd, "127.0.0.1", 8080) < 0) return -1;
+    SSL *tmp_ssl = connect_tls_to_server(tmp_ctx, tmp_fd);
+    if (!tmp_ssl) return -1;
+
+    // 3. Invio: ENROLL | user | otp | CSR
+    char *full_cmd = malloc(8192);
+    snprintf(full_cmd, 8192, "ENROLL|%s|%s|%s", user, otp, csr_buf);
+    SSL_write(tmp_ssl, full_cmd, strlen(full_cmd));
+    free(full_cmd);
+
+    // 4. Ricezione certificato
+    memset(response, 0, sizeof(response));
+    int bytes = SSL_read(tmp_ssl, response, sizeof(response)-1);
+    
+    int success = -1;
+    if (bytes > 0 && strstr(response, "BEGIN CERTIFICATE")) {
+        save_buffer_to_file(cert_path, response);
+        remove(csr_path); // Pulizia
+        success = 0;
+    }
+
+    SSL_shutdown(tmp_ssl);
+    SSL_free(tmp_ssl);
+    SSL_CTX_free(tmp_ctx);
+    close(tmp_fd);
+    return success;
+}
+
 
 // --- LOGICA OPERATIVA (mTLS) ---
 
