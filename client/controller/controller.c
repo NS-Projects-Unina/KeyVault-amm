@@ -8,19 +8,27 @@ static void dispatch_service_action(int choice) {
     char service_name[128], password[128];
 
     switch (choice) {
-        case 1:
-            printf("\nServizio (es. Amazon): "); 
+        case 1: // STORE
+            printf("\n--- SALVATAGGIO CREDENZIALE ---\n");
+            printf("Servizio (es. Amazon): "); 
             scanf("%127s", service_name);
             printf("Password: "); 
             scanf("%127s", password);
-            // Il Controller non invia byte grezzi, delega al Service
+            
+            // Chiamata al Service
             client_service_store_data(service_name, password);
             break;
+
+        case 2: // GET_ALL
+            printf("\n--- RECUPERO VAULT PERSONALE ---\n");
+            // Questa funzione nel Service dovrà inviare "GET_ALL" al server
+            client_service_fetch_data(); 
+            break;
+
         default:
             printf("[-] Opzione non valida.\n");
     }
 }
-
 void start_app_controller() {
     
     printf("[*] Verifica stato identità digitale...\n");

@@ -22,37 +22,37 @@ static void handle_enrollment_session() {
 
     char *cmd = strtok(buffer, "|");
     
-    // --- NUOVA LOGICA: FASE DI RICHIESTA ---
+    // FASE 1: Richiesta OTP
     if (cmd && strcmp(cmd, "REQUEST_ENROLL") == 0) {
         char *user = strtok(NULL, "|");
         if (user) {
-            char otp[9]; // Codice da 8 caratteri
+            char otp[9]; 
             generate_random_otp(otp, sizeof(otp));
             
-            // Usiamo la funzione DAL che hai appena aggiunto
-            if (dal_save_pending_request(user, otp) == 0) {
+            // Il Controller ora parla solo col Service!
+            if (vault_service_request_enrollment(user, otp) == 0) {
                 printf("\n[!!!] ADMIN: Richiesta da '%s'. OTP generato: %s\n", user, otp);
-                vault_service_send_data("OK|Richiesta inviata. Attendi l'OTP dall'amministratore.");
+                send_response("OK", "Richiesta registrata. Chiedi l'OTP all'admin.");
             } else {
-                vault_service_send_data("ERROR|Richiesta già presente o errore database.");
+                send_response("ERROR", "Impossibile processare la richiesta.");
             }
         }
-        return;
     }
-
-    // --- LOGICA ESISTENTE: FASE DI ENROLLMENT FINALE ---
-    if (cmd && strcmp(cmd, "ENROLL") == 0) {
+    // FASE 2: Invio CSR + OTP
+    else if (cmd && strcmp(cmd, "ENROLL") == 0) {
         char *user = strtok(NULL, "|");
         char *otp = strtok(NULL, "|");
         char *csr = strtok(NULL, ""); 
 
         if (user && otp && csr) {
-            if (vault_service_process_enrollment(user, otp, csr) == 0) {
-                printf("[+] Enrollment completato per %s.\n", user);
-            } else {
-                vault_service_send_data("ERROR|OTP errato o scaduto.");
+            if (vault_service_process_enrollment(user, otp, csr) != 0) {
+                // L'errore è già inviato dentro process_enrollment
+                printf("[-] Enrollment fallito per l'utente %s.\n", user);
             }
         }
+    }
+    else {
+        send_response("ERROR", "In questa fase puoi solo registrarti.");
     }
 }
 

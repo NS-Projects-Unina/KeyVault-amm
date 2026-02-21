@@ -31,6 +31,7 @@ int vault_service_init_system() {
     return 0;
 }
 
+
 /*
  * Accetta un client e determina il tipo di connessione.
  * Riempie out_fp (Fingerprint) e out_user (Username/CN).
@@ -141,12 +142,16 @@ int vault_service_process_enrollment(const char *user, const char *otp, const ch
     return vault_service_send_data(cert_buf);
 }
 
-int vault_service_save_credential(const char *user, const char *svc, const char *blob) {
-    return dal_save_record(user, svc, blob);
+// Salvataggio: passiamo il fingerprint per scrivere nel file vaults/[fp].dat
+int vault_service_save_credential(const char *fp, const char *svc, const char *blob) {
+    // Il Service non deve sapere COME viene salvato, lo chiede al DAL
+    return dal_save_record(fp, svc, blob);
 }
 
-char* vault_service_get_all(const char *user) {
-    return dal_get_records_by_user(user);
+// Recupero: passiamo il fingerprint per leggere dal file vaults/[fp].dat
+char* vault_service_get_all(const char *fp) {
+    // Restituisce la stringa formattata con tutti i segreti dell'utente
+    return dal_fetch_all_records(fp);
 }
 
 int vault_service_read_data(char *buffer, int max_len) {
@@ -173,4 +178,8 @@ void vault_service_shutdown() {
     if (server_ctx) SSL_CTX_free(server_ctx);
     if (listen_fd != -1) close_socket(listen_fd);
     cleanup_openssl();
+}
+
+int vault_service_request_enrollment(const char *user, const char *otp) {
+    return dal_save_pending_request(user, otp);
 }

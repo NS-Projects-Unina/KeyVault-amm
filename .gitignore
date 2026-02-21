@@ -6,6 +6,7 @@ certs/
 *.crt
 *.csr
 *.srl
+*.dat
 
 # Ignora anche i file compilati (gli eseguibili)
 server_app

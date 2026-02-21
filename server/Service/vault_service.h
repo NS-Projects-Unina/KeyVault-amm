@@ -16,11 +16,11 @@ int vault_service_read_data(char *buffer, int max_len);
 int vault_service_send_data(const char *data);
 
 // --- Logica di Business --- 
-int vault_service_save_credential(const char *user, const char *svc, const char *blob);
-char* vault_service_get_all(const char *user);
-
-
+int vault_service_save_credential(const char *fp, const char *svc, const char *blob);
+char* vault_service_get_all(const char *fp);
 
 //Utility per generare OTP casuali (usata nella fase di enrollment)
 void generate_random_otp(char *out, size_t len);
+
+int vault_service_request_enrollment(const char *user, const char *otp);
 #endif
