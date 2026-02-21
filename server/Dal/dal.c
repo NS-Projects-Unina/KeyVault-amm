@@ -82,37 +82,29 @@ int dal_save_record(const char *fp, const char *service, const char *encrypted_b
     return 0;
 }
 
-// RECUPERA: Legge TUTTO dal file specifico dell'utente
 char* dal_fetch_all_records(const char *fp) {
     char path[512];
     get_vault_path(fp, path, sizeof(path));
 
     FILE *f = fopen(path, "rb");
-    if (!f) return strdup("[-] Nessun dato trovato per questa identità.\n");
+    if (!f) return strdup("[-] Nessun dato trovato.\n");
 
     char *result = calloc(8192, 1);
     if (!result) { fclose(f); return NULL; }
 
     char line[2048];
     while (fgets(line, sizeof(line), f)) {
-        line[strcspn(line, "\r\n")] = 0; // Pulisce a capo
+        line[strcspn(line, "\r\n")] = 0; 
         if (strlen(line) == 0) continue;
 
-        char *svc = strtok(line, "|");
-        char *data = strtok(NULL, "|");
-
-        if (svc && data) {
-            if (strlen(result) + strlen(svc) + strlen(data) + 10 < 8000) {
-                strcat(result, "[Svc: ");
-                strcat(result, svc);
-                strcat(result, "] Data: ");
-                strcat(result, data);
-                strcat(result, "\n");
-            }
+        // Mandiamo semplicemente "servizio|hex_cifrato\n"
+        if (strlen(result) + strlen(line) + 2 < 8000) {
+            strcat(result, line);
+            strcat(result, "\n");
         }
     }
     fclose(f);
-    return result;
+    return result; // Ora il client riceverà: Amazon|a1b2c3...
 }
 
 /* ========================================================================= *

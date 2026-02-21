@@ -1,96 +1,84 @@
 #include "controller.h"
-#include "service.h"
+#include "client_service.h"    // Per sessione mTLS e Vault
+#include "client_enrollment.h" // Per la fase di registrazione
+#include "client_utils.h"      // Per get_system_user
+#include "crypto_utils.h"       // Per la gestione chiavi e cifratura
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 
-// Funzione helper interna (non esposta nell'header)
 static void dispatch_service_action(int choice) {
     char service_name[128], password[128];
 
+    // CANCELLATO: unsigned char final_key[AES_KEY_LEN]; -> Non serve più qui
+
     switch (choice) {
         case 1: // STORE
+            // CANCELLATO: if (client_service_prepare_crypto_key(final_key) != 0) -> Lo facciamo nel bootstrap
             printf("\n--- SALVATAGGIO CREDENZIALE ---\n");
-            printf("Servizio (es. Amazon): "); 
-            scanf("%127s", service_name);
-            printf("Password: "); 
-            scanf("%127s", password);
+            printf("Servizio: "); scanf("%127s", service_name);
+            printf("Password: "); scanf("%127s", password);
             
-            // Chiamata al Service
-            client_service_store_data(service_name, password);
+            // MODIFICATO: Non passiamo più la chiave, il service usa quella di sessione
+            client_service_store_data_encrypted(service_name, password);
             break;
 
         case 2: // GET_ALL
+            // CANCELLATO: if (client_service_prepare_crypto_key(final_key) != 0) -> Ridondante
             printf("\n--- RECUPERO VAULT PERSONALE ---\n");
-            // Questa funzione nel Service dovrà inviare "GET_ALL" al server
-            client_service_fetch_data(); 
+            
+            // MODIFICATO: Nessun parametro passato
+            client_service_fetch_data_encrypted(); 
             break;
 
         default:
             printf("[-] Opzione non valida.\n");
     }
 }
+
 void start_app_controller() {
-    
-    printf("[*] Verifica stato identità digitale...\n");
-
+    // 1. Fase di Bootstrap / Enrollment (Invariata)
     if (client_service_needs_enrollment()) {
-        printf("[!] Nessun certificato trovato.\n");
         const char *user = get_system_user();
+        if (client_service_request_enrollment(user) != 0) return;
 
-        // 1. Fase di Richiesta: Il server genera l'OTP
-        printf("[*] Invio richiesta di accreditamento per: %s\n", user);
-        if (client_service_request_enrollment(user) != 0) {
-            fprintf(stderr, "[-] Errore nella richiesta iniziale.\n");
-            return;
-        }
-
-        printf("\n----------------------------------------------------------\n");
-        printf("[?] Richiesta registrata! Ora contatta l'Amministratore.\n");
-        printf("[?] Fatti dare l'OTP per completare l'enrollment.\n");
-        printf("----------------------------------------------------------\n");
-
-        // 2. Fase di Finalizzazione: L'utente inserisce l'OTP
         char otp[64];
         printf("\nInserisci l'OTP fornito dall'admin: ");
-        if (scanf("%63s", otp) != 1) return;
+        scanf("%63s", otp);
 
-        if (client_service_perform_enrollment(user, otp) != 0) {
-            fprintf(stderr, "[-] Registrazione fallita. OTP errato o scaduto.\n");
-            return;
-        }
-        printf("[+] Registrazione completata! Certificato ottenuto.\n");
-    } else {
-        printf("[+] Certificato digitale già presente. Procedo con la connessione mTLS.\n");
+        if (client_service_perform_enrollment(user, otp) != 0) return;
     }
 
-    // --- FASE 1: INIZIALIZZAZIONE SESSIONE mTLS ---
-    // Ora siamo certi che il certificato esista (o era già lì o lo abbiamo appena creato)
+    // 2. Inizializzazione sessione mTLS operativa
     if (client_service_init_session() != 0) {
-        fprintf(stderr, "[-] Errore fatale: Impossibile stabilire la connessione mTLS.\n");
+        fprintf(stderr, "[-] Errore fatale: Impossibile connettersi.\n");
+        return;
+    }
+    printf("[+] Connessione mTLS stabilita con successo!\n");
+
+    // 3. SBLOCCO CRITTOGRAFICO (BOOTSTRAP)
+    // Questa è l'unica volta in cui l'utente interagisce con la chiave!
+    printf("\n[*] Inizializzazione sicurezza Vault...\n");
+    if (client_service_bootstrap_crypto() != 0) {
+        fprintf(stderr, "[-] Sblocco fallito. Uscita.\n");
+        client_service_close_session();
         return;
     }
 
-    printf("[+] Connessione mTLS stabilita con successo!\n");
-
-    // --- FASE 2: LOOP DELL'INTERFACCIA UTENTE ---
+    // 4. Loop Interfaccia Utente
     int choice;
     while (1) {
-        printf("\n--- MENU VAULT ---\n");
+        printf("\n--- MENU VAULT (SBLOCCATO) ---\n");
         printf("1. Salva nuova password\n");
-        printf("2. Recupera il tuo Vault\n"); // Aggiunto per completezza
+        printf("2. Recupera il tuo Vault\n");
         printf("3. Esci\n");
         printf("Scelta: ");
         
         if (scanf("%d", &choice) != 1) break;
-
-        if (choice == 3) {
-            printf("[*] Chiusura sessione in corso...\n");
-            break;
-        }
+        if (choice == 3) break;
 
         dispatch_service_action(choice);
     }
 
-    // --- FASE 3: CLEANUP ---
     client_service_close_session();
 }

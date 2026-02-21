@@ -1,5 +1,4 @@
 CC = gcc
-# Aggiungiamo tutti i nuovi path di inclusione per gli header (.h)
 CFLAGS = -Wall -Wextra -g \
          -I./network \
          -I./ssl \
@@ -11,11 +10,11 @@ CFLAGS = -Wall -Wextra -g \
          -I./client/service
 
 LDFLAGS = -lssl -lcrypto 
+PORT = 8080
 
 all: server_app client_app
 
 # Compilazione del SERVER
-# Includiamo tutti i file .c dei layer del server
 server_app: server/server_main.c \
             network/network.c \
             ssl/ssl.c \
@@ -26,16 +25,26 @@ server_app: server/server_main.c \
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
 # Compilazione del CLIENT
-# Includiamo tutti i file .c dei layer del client
 client_app: client/client_main.c \
+            client/controller/controller.c \
+            client/service/client_utils.c \
+            client/service/client_enrollment.c \
+            client/service/client_service.c \
+            client/service/crypto_utils.c \
             network/network.c \
             ssl/ssl.c \
-            ssl/pki/pki.c \
-            client/controller/controller.c \
-            client/service/service.c
+            ssl/pki/pki.c
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
-clean:
+# --- TARGET PER FERMARE IL SERVER ---
+stop:
+	@echo "[*] Liberazione porta $(PORT)..."
+	@fuser -k $(PORT)/tcp 2>/dev/null || echo "[-] Nessun processo attivo sulla porta $(PORT)."
+
+clean: stop
+	@echo "[*] Pulizia file binari e database..."
 	rm -f server_app client_app
 	rm -rf certs/
-	rm -f vault.dat
+	rm -f pending_requests.dat users.dat
+	rm -rf vaults/
+	@echo "[+] Sistema resettato e porta libera."
