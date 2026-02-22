@@ -139,7 +139,14 @@ int vault_service_process_enrollment(const char *user, const char *otp, const ch
     cert_buf[n] = '\0';
     fclose(fc);
 
-    return vault_service_send_data(cert_buf);
+    printf("[+] Service: Enroll completato per user '%s' con FP %.16s...\n", user, fingerprint);
+
+    // Inviamo i dati, ma non usiamo il numero di byte come successo della funzione
+    if (vault_service_send_data(cert_buf) <= 0) {
+        return -1; // Qui c'è stato un vero errore di rete
+    }
+
+    return 0; // SUCCESSO: La funzione ha finito il suo lavoro correttamente
 }
 
 // Salvataggio: passiamo il fingerprint per scrivere nel file vaults/[fp].dat

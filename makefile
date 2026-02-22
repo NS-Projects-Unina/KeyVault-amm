@@ -1,4 +1,10 @@
 CC = gcc
+
+# Recuperiamo automaticamente flag e librerie per GTK 4 e OpenSSL
+GTK_CFLAGS := $(shell pkg-config --cflags gtk4)
+GTK_LIBS   := $(shell pkg-config --libs gtk4)
+
+# CFLAGS: aggiungiamo le flag di GTK e il path del client per trovare gui_manager.h
 CFLAGS = -Wall -Wextra -g \
          -I./network \
          -I./ssl \
@@ -7,14 +13,18 @@ CFLAGS = -Wall -Wextra -g \
          -I./server/Service \
          -I./server/Dal \
          -I./client/controller \
-         -I./client/service
+         -I./client/service \
+         -I./client \
+         $(GTK_CFLAGS)
 
-LDFLAGS = -lssl -lcrypto 
+# LDFLAGS: SSL, Crypto e ora tutte le librerie grafiche di GTK 4
+LDFLAGS = -lssl -lcrypto $(GTK_LIBS)
 PORT = 8080
 
 all: server_app client_app
 
-# Compilazione del SERVER
+# --- COMPILAZIONE DEL SERVER ---
+# Nota: il server non usa GTK, quindi filtriamo LDFLAGS per non appesantirlo
 server_app: server/server_main.c \
             network/network.c \
             ssl/ssl.c \
@@ -22,11 +32,13 @@ server_app: server/server_main.c \
             server/Controller/controller.c \
             server/Service/vault_service.c \
             server/Dal/dal.c
-	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
+	$(CC) $(CFLAGS) $^ -o $@ -lssl -lcrypto
 
-# Compilazione del CLIENT
+
+# --- COMPILAZIONE DEL CLIENT (GUI) ---
+# RIMOSSO: client/controller/controller.c
 client_app: client/client_main.c \
-            client/controller/controller.c \
+            client/gui_manager/gui_manager.c \
             client/service/client_utils.c \
             client/service/client_enrollment.c \
             client/service/client_service.c \
