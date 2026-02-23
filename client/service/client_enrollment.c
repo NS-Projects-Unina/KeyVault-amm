@@ -15,10 +15,19 @@
 
 int client_service_needs_enrollment() {
     char cert_path[256];
-    snprintf(cert_path, sizeof(cert_path), "certs/%s.crt", get_system_user());
+    
+    const char *username = client_context_get_username();
+    if(strlen(username) == 0) {
+        const char *sys_user = get_system_user();
+        client_context_set_username(sys_user);
+        username = client_context_get_username();
+    }
+
+    snprintf(cert_path, sizeof(cert_path), "certs/%s.crt", username);
     // Se il file .crt non esiste, l'utente deve registrarsi
     return (access(cert_path, F_OK) == -1);
 }
+
 int client_service_request_enrollment(const char *user) {
     ensure_certs_dir();
     

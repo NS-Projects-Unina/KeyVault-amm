@@ -4,6 +4,7 @@
 //Appena riceve il segnale, delega tutto a setup_main_window, che si occupa di costruire l'interfaccia grafica
 static void on_activate(GtkApplication *app, gpointer user_data) {
     (void)user_data; // Questo toglie il warning "unused parameter"
+    client_service_set_default_username(); // Imposta l'username di default nel Context, passando per il service
     setup_main_window(app); 
 }
 
@@ -11,7 +12,7 @@ int main(int argc, char **argv) {
 
     // 1. Creazione dell'oggetto GtkApplication.
     // 2. Il programma si identifica con [org.keyvault.client] al SO.
-    // 2. Il SO verifica se esiste un processo con lo stesso ID  (SINGLETON):
+    // 3. Il SO verifica se esiste un processo con lo stesso ID  (SINGLETON):
     //    - Se esiste, il controllo viene passato a quel processo (e questo termina)
     //    - Se non esiste, viene creato un nuovo processo (il nostro)
     GtkApplication *app = gtk_application_new("org.keyvault.client", G_APPLICATION_DEFAULT_FLAGS);

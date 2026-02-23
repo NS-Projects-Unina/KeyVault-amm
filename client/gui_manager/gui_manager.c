@@ -17,6 +17,7 @@ static GtkWidget *status_connect;
 static GtkWidget *status_intro;
 static GtkWidget *ip_entry;
 static GtkWidget *server_toggle;
+static GtkWidget *user_info_label;
 
 // --- PROTOTIPI DELLE FUNZIONI DI PAGINA (Per evitare warning di dichiarazione) ---
 GtkWidget* create_intro_page();
@@ -249,30 +250,29 @@ void on_start_clicked(GtkWidget *widget, gpointer data) {
     }
 }
 
-// Callback per il salvataggio della configurazione server
-static void on_server_config_done(GtkWidget *widget, gpointer data) {
-    (void)widget; (void)data;
-    
-    const char *final_ip;
-    // Se lo switch è attivo (ON), usiamo l'IP manuale, altrimenti localhost
-    if (gtk_switch_get_active(GTK_SWITCH(server_toggle))) {
-        final_ip = gtk_editable_get_text(GTK_EDITABLE(ip_entry));
-    } else {
-        final_ip = "127.0.0.1";
-    }
-    printf("[*] Server IP configurato: %s\n", final_ip);
-    client_service_set_server_config(final_ip); //Setta nel service --> context
-    gtk_stack_set_visible_child_name(GTK_STACK(stack), "intro_page");
-}
-
 // Gestione dell'abilitazione del campo IP in base allo switch
 static void on_server_toggle_changed(GtkSwitch *sw, gpointer data) {
     (void)data;
     gtk_widget_set_sensitive(ip_entry, gtk_switch_get_active(sw));
 }
 
+static void on_config_done(GtkWidget *widget, gpointer data) {
+    (void)widget; (void)data;
+  // 1. Recupero IP
+    const char *final_ip = gtk_switch_get_active(GTK_SWITCH(server_toggle)) ? 
+                           gtk_editable_get_text(GTK_EDITABLE(ip_entry)) : "127.0.0.1";
+
+    //2. Salvataggio
+    client_service_set_server_config(final_ip);
+
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), "intro_page");
+}
+
+// --- COSTRUZIONE UI ---
+
 // Creazione della nuova pagina di configurazione
-GtkWidget* create_server_config_page() {
+GtkWidget* create_config_page() {
+
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 20);
     gtk_widget_set_halign(box, GTK_ALIGN_CENTER);
     gtk_widget_set_valign(box, GTK_ALIGN_CENTER);
@@ -293,14 +293,12 @@ GtkWidget* create_server_config_page() {
 
     GtkWidget *btn = gtk_button_new_with_label("Conferma e Prosegui");
     gtk_widget_add_css_class(btn, "suggested-action");
-    g_signal_connect(btn, "clicked", G_CALLBACK(on_server_config_done), NULL);
+    g_signal_connect(btn, "clicked", G_CALLBACK(on_config_done), NULL);
     gtk_box_append(GTK_BOX(box), btn);
 
     return box;
 }
 
-
-// --- COSTRUZIONE UI ---
 GtkWidget* create_intro_page() {
     // 1. Box verticale con spacing 0 (gestiamo lo spazio noi con i margini)
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
@@ -465,34 +463,61 @@ GtkWidget* create_vault_page() {
     return box;
 }
 
-void setup_main_window(GtkApplication *app) {
 
-    //Creazione finestra principale
-    GtkWidget *window = gtk_application_window_new(app); //Crea oggetto finestra, e lo associa all'oggetto app
-    //Titolo e dimensioni iniziali della finestra
+GtkWidget* create_persistent_header() {
+    // Un box orizzontale con padding
+    GtkWidget *header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_widget_set_margin_start(header, 15);
+    gtk_widget_set_margin_top(header, 10);
+    gtk_widget_set_margin_bottom(header, 5);
+
+    // Label per l'utente
+    user_info_label = gtk_label_new("");
+    gtk_widget_add_css_class(user_info_label, "user-badge"); 
+    
+    // Recuperiamo l'utente iniziale dal context tramite il service
+    const char *current_user = client_service_get_username(); 
+    char label_text[256];
+    snprintf(label_text, sizeof(label_text), "Utente: %s", current_user);
+    gtk_label_set_text(GTK_LABEL(user_info_label), label_text);
+
+    gtk_box_append(GTK_BOX(header), user_info_label);
+    
+    return header;
+}
+
+void setup_main_window(GtkApplication *app) { 
+    // 1. Creazione della finestra principale
+    GtkWidget *window = gtk_application_window_new(app); 
     gtk_window_set_title(GTK_WINDOW(window), "KeyVault(amm) Client");
-    gtk_window_set_default_size(GTK_WINDOW(window), 500, 450);
+    gtk_window_set_default_size(GTK_WINDOW(window), 500, 500); // Aumentato leggermente per l'header
 
+    // 2. CREAZIONE DEL CONTENITORE PRINCIPALE (Vertical Box)
+    // Questo conterrà sia l'header fisso che lo stack variabile
+    GtkWidget *main_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_window_set_child(GTK_WINDOW(window), main_vbox); 
 
-    //Creazione del motore di Navigazione (Stack) e aggiunta delle pagine
-    /*
-        In GTK4, un GtkStack è un contenitore che può ospitare più figli (pagine),
-        ma ne mostra uno alla volta, utile per interfacce a tappe.
-    */
-    stack = gtk_stack_new(); // Crea un nuovo GtkStack
-    gtk_stack_set_transition_type(GTK_STACK(stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE); //Definisce l'animazione di change pagina
-    gtk_window_set_child(GTK_WINDOW(window), stack); 
-    //Ogni finestra può avere un solo figlio diretto, dunque diciamo alla finestra che il suo figlio è lo stack (che a sua volta conterrà tutte le pagine)
+    // 3. AGGIUNTA HEADER PERSISTENTE (Alto)
+    // create_persistent_header() deve restituire un GtkWidget* con la label dell'utente
+    gtk_box_append(GTK_BOX(main_vbox), create_persistent_header());
 
-    //Registrazione delle pagine allo stack, con un nome identificativo per ognuna (usato per navigare tra le pagine)
-    gtk_stack_add_named(GTK_STACK(stack), create_server_config_page(), "server_page");
+    // 4. CREAZIONE DELLO STACK (Basso - Navigabile)
+    stack = gtk_stack_new(); 
+    gtk_stack_set_transition_type(GTK_STACK(stack), GTK_STACK_TRANSITION_TYPE_CROSSFADE);
+    
+    // Importante: diciamo allo stack di espandersi per occupare tutto lo spazio rimanente
+    gtk_widget_set_vexpand(stack, TRUE);
+    gtk_box_append(GTK_BOX(main_vbox), stack);
+
+    // 5. REGISTRAZIONE DELLE PAGINE
+    gtk_stack_add_named(GTK_STACK(stack), create_config_page(), "config_page");
     gtk_stack_add_named(GTK_STACK(stack), create_intro_page(), "intro_page");
     gtk_stack_add_named(GTK_STACK(stack), create_enrollment_page(), "enroll_page");
     gtk_stack_add_named(GTK_STACK(stack), create_key_select_page(), "key_page");
     gtk_stack_add_named(GTK_STACK(stack), create_connect_page(), "connect_page");
     gtk_stack_add_named(GTK_STACK(stack), create_vault_page(), "vault_page");
 
-    //All'avvio mostriamo la pagina intro_page
-    gtk_stack_set_visible_child_name(GTK_STACK(stack), "server_page"); //Iniziamo dalla configurazione server, è importante che l'utente configuri l'IP prima di qualsiasi altra cosa
-    gtk_window_present(GTK_WINDOW(window)); //Dice al sistema operativo di rendere visibile la finestra (e dunque tutta l'interfaccia)
+    // 6. AVVIO
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), "config_page"); 
+    gtk_window_present(GTK_WINDOW(window)); 
 }

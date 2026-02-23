@@ -1,6 +1,6 @@
 #include "client_service.h"
 #include "client_utils.h"
-#include "client_context.h"
+#include "client_context.h" // Obbligatorio per gestire lo stato
 #include "crypto_utils.h"
 #include "ssl.h"
 #include "network.h"
@@ -8,69 +8,79 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-static SSL *active_ssl = NULL;
-static int active_sockfd = -1;
-static unsigned char session_key[AES_KEY_LEN];
-static int is_crypto_ready = 0;
-
-void client_service_set_server_config(const char *ip) {
-    // Il Service riceve l'ordine dalla GUI e lo inoltra allo strato inferiore
+void client_service_set_server_config(const char *ip) { 
     client_context_set_server_ip(ip);
 }
 
-// Inizializza la connessione mTLS
-int client_service_init_session() {
-    // 1. PULIZIA PREVENTIVA E RESET DELLO STATO
-    if (active_ssl) {
-        SSL_shutdown(active_ssl);
-        SSL_free(active_ssl);
-        active_ssl = NULL;
-    }
-    if (active_sockfd != -1) {
-        close(active_sockfd);
-        active_sockfd = -1;
-    }
+void client_service_set_default_username() {
+    const char *sys_user = get_system_user();
+    client_context_set_username(sys_user);
+}
 
-    const char *username = get_system_user();
+//Sviluppi futuri
+void client_service_set_username(const char *username) {
+    client_context_set_username(username);
+}
+const char* client_service_get_username() {
+    return client_context_get_username();
+}
+
+
+int client_service_init_session() {
+    // 1. PULIZIA PREVENTIVA (Recupero stato vecchio dal Context)
+    SSL *old_ssl = client_context_get_ssl();
+    int old_fd = client_context_get_sockfd();
+    
+    if (old_ssl) { SSL_shutdown(old_ssl); SSL_free(old_ssl); client_context_set_ssl(NULL); }
+    if (old_fd != -1) { close(old_fd); client_context_set_sockfd(-1); }
+
+
+    const char *username = client_context_get_username();
+  
+    //Spostare in una funzione utils
     char cert_path[256], key_path[256];
     snprintf(cert_path, sizeof(cert_path), "certs/%s.crt", username);
     snprintf(key_path, sizeof(key_path), "certs/%s.key", username);
-
-    // Se non abbiamo ancora i certificati, non possiamo inizializzare mTLS
-    // Usciamo senza errore "fatale", l'enrollment gestirà il resto
     if (access(cert_path, F_OK) == -1) return -1;
+
 
     init_openssl();
     SSL_CTX *ctx = create_client_mtls_ctx(cert_path, key_path, "certs/ca.crt");
     if (!ctx) return -1;
     
-    active_sockfd = create_tcp_socket();
+    // 2. CONNESSIONE USANDO IL CONTEXT
+    int fd = create_tcp_socket();
     const char *ip = client_context_get_server_ip();
     int port = client_context_get_server_port();
 
-    if (connect_to_server(active_sockfd, ip, port) < 0) {
+    if (connect_to_server(fd, ip, port) < 0) {
         SSL_CTX_free(ctx);
         return -1;
     }
 
-    active_ssl = connect_tls_to_server(ctx, active_sockfd);
+    SSL *ssl = connect_tls_to_server(ctx, fd);
     SSL_CTX_free(ctx); 
 
-    return (active_ssl != NULL) ? 0 : -1;
+    // 3. SALVATAGGIO NUOVO STATO NEL CONTEXT
+    client_context_set_ssl(ssl);
+    client_context_set_sockfd(fd);
+
+    return (ssl != NULL) ? 0 : -1;
 }
 
-// Imposta la chiave di sessione (chiamata dalla GUI o dal bootstrapper)
+// Salvataggio della chiave nello strato di sicurezza del Context
 void client_service_set_session_key(const unsigned char *key) {
-    memcpy(session_key, key, AES_KEY_LEN);
-    is_crypto_ready = 1;
+    client_context_set_session_key(key);
 }
 
-// STORE: Ora restituisce la risposta del server come stringa, senza stamparla
 int client_service_store_data_encrypted(const char *svc, const char *pass, char *out_server_resp, size_t resp_len) {
-    if (!active_ssl || !is_crypto_ready) return -1;
+    // Controllo stato tramite Context
+    SSL *ssl = client_context_get_ssl();
+    if (!ssl || !client_context_is_crypto_ready()) return -1;
 
     unsigned char encrypted_blob[1024];
-    int encrypted_len = crypto_encrypt((unsigned char*)pass, strlen(pass), session_key, encrypted_blob);
+    // Recupero chiave dal Context per la cifratura
+    int encrypted_len = crypto_encrypt((unsigned char*)pass, strlen(pass), client_context_get_session_key(), encrypted_blob);
 
     char hex_payload[2048];
     for (int i = 0; i < encrypted_len; i++) {
@@ -80,23 +90,23 @@ int client_service_store_data_encrypted(const char *svc, const char *pass, char 
     char command[4096];
     snprintf(command, sizeof(command), "STORE|%s|%s", svc, hex_payload);
     
-    if (SSL_write(active_ssl, command, strlen(command)) > 0) {
+    if (SSL_write(ssl, command, strlen(command)) > 0) {
         memset(out_server_resp, 0, resp_len);
-        return SSL_read(active_ssl, out_server_resp, resp_len - 1);
+        return SSL_read(ssl, out_server_resp, resp_len - 1);
     }
     return -1;
 }
 
-// FETCH: accetta un puntatore a funzione (callback)
 void client_service_fetch_vault(void (*data_handler)(const char *svc, const char *pass)) {
-    if (!active_ssl || !is_crypto_ready || !data_handler) return;
+    SSL *ssl = client_context_get_ssl();
+    if (!ssl || !client_context_is_crypto_ready() || !data_handler) return;
 
     char *command = "GET_ALL";
     char response[8192];
 
-    SSL_write(active_ssl, command, strlen(command));
+    SSL_write(ssl, command, strlen(command));
     memset(response, 0, sizeof(response));
-    int bytes = SSL_read(active_ssl, response, sizeof(response) - 1);
+    int bytes = SSL_read(ssl, response, sizeof(response) - 1);
     
     if (bytes <= 0) return;
 
@@ -114,12 +124,12 @@ void client_service_fetch_vault(void (*data_handler)(const char *svc, const char
             }
 
             unsigned char decrypted_pass[256];
-            int decrypted_len = crypto_decrypt(ciphertext, blob_len, session_key, decrypted_pass);
+            // Decifratura usando la chiave del Context
+            int decrypted_len = crypto_decrypt(ciphertext, blob_len, client_context_get_session_key(), decrypted_pass);
 
             if (decrypted_len > 0) {
                 decrypted_pass[decrypted_len] = '\0';
-                // Passa i dati decifrati al gestore (GUI o CLI)
-                data_handler(svc, (const char*)decrypted_pass); //Funzione passata dall'argomento
+                data_handler(svc, (const char*)decrypted_pass);
             }
             free(ciphertext);
         }
@@ -128,14 +138,17 @@ void client_service_fetch_vault(void (*data_handler)(const char *svc, const char
 }
 
 void client_service_close_session() {
-    if (active_ssl) {
-        SSL_shutdown(active_ssl);
-        SSL_free(active_ssl);
-        active_ssl = NULL;
+    SSL *ssl = client_context_get_ssl();
+    int fd = client_context_get_sockfd();
+
+    if (ssl) {
+        SSL_shutdown(ssl);
+        SSL_free(ssl);
+        client_context_set_ssl(NULL);
     }
-    if (active_sockfd != -1) {
-        close(active_sockfd); 
-        active_sockfd = -1;
+    if (fd != -1) {
+        close(fd); 
+        client_context_set_sockfd(-1);
     }
     cleanup_openssl();
 }
