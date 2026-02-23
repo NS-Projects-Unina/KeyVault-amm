@@ -20,7 +20,6 @@ typedef struct {
     char  username[256]; // Nome utente associato al certificato (se autenticato) o alla richiesta di enrollment
 } ClientContext;
 
-
 /* ========================================================================= *
  *          HELPER I/O (ora thread-safe: usano il proprio ssl)               *
  * ========================================================================= */
