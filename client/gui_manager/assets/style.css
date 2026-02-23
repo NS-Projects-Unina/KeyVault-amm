@@ -1,0 +1,61 @@
+/* Sfondo generale della finestra */
+window {
+    background-color: #0d1117;
+    color: #2f5c88;
+    font-family: "Segoe UI", "Roboto", sans-serif;
+}
+
+/* Badge dell'utente in alto a sinistra */
+.user-badge {
+    color: #58a6ff;
+    font-weight: 600;
+    font-size: 0.9em;
+    background-color: rgba(88, 166, 255, 0.15);
+    padding: 6px 12px;
+    border-radius: 20px;
+    border: 1px solid rgba(88, 166, 255, 0.3);
+}
+
+/* Intestazione della tabella nel Vault */
+.table-header label {
+    font-weight: bold;
+    color: #8b949e;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 2px solid #30363d;
+    padding-bottom: 8px;
+    margin-bottom: 10px;
+}
+
+/* Righe della lista password */
+.vault-row {
+    padding: 12px;
+    border-bottom: 1px solid #21262d;
+    transition: background 0.2s;
+}
+
+.vault-row:hover {
+    background-color: rgba(56, 139, 253, 0.1);
+}
+
+/* Bottoni principali */
+button.suggested-action {
+    background-color: #238636;
+    color: white;
+    border-radius: 6px;
+    font-weight: bold;
+    padding: 8px 16px;
+}
+
+button.suggested-action:hover {
+    background-color: #2ea043;
+}
+
+/* Campi di input */
+entry {
+    background-color: #161b22;
+    border: 1px solid #30363d;
+    color: #c9d1d9;
+    border-radius: 6px;
+    padding: 8px;
+}

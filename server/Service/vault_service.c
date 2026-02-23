@@ -7,85 +7,139 @@
 #include <string.h>
 #include <unistd.h>
 #include <openssl/x509.h>
-#include <openssl/pem.h> //Per la gestione dei certificati in memoria
+#include <openssl/pem.h>
 
-// Lo stato dell'infrastruttura di rete è blindato qui dentro
+/*
+ * Stato globale del SERVER (condiviso, ma solo in lettura dopo l'init).
+ * Non contiene più alcun riferimento al client corrente: ogni thread
+ * gestisce il proprio SSL* in modo completamente indipendente.
+ */
 static SSL_CTX *server_ctx = NULL;
-static int listen_fd = -1;
-
-// Manteniamo traccia del client attualmente connesso
-static SSL *current_client_ssl = NULL;
+static int      listen_fd  = -1;
 
 
-// Inizializzazione con il nuovo contesto Ibrido
+/* ========================================================================= *
+ * CICLO DI VITA DEL SISTEMA                                                 *
+ * ========================================================================= */
+
 int vault_service_init_system() {
     setup_server_infrastructure();
     init_openssl();
-    // Usiamo la funzione aggiornata in ssl.c che permette l'accesso anonimo
+
     server_ctx = create_server_ctx("certs/server.crt", "certs/server.key", "certs/ca.crt");
     if (!server_ctx) return -1;
 
     listen_fd = create_tcp_socket();
     if (bind_socket(listen_fd, 8080) < 0) return -1;
-    listen_socket(listen_fd, 5);
+    listen_socket(listen_fd, 128); // backlog aumentato per gestire più connessioni simultanee
     return 0;
 }
 
+void vault_service_shutdown() {
+    if (server_ctx) { SSL_CTX_free(server_ctx); server_ctx = NULL; }
+    if (listen_fd != -1) { close_socket(listen_fd); listen_fd = -1; }
+    cleanup_openssl();
+}
+
+
+/* ========================================================================= *
+ *                          ACCETTAZIONE CLIENT                              *
+ * ========================================================================= */
 
 /*
- * Accetta un client e determina il tipo di connessione.
- * Riempie out_fp (Fingerprint) e out_user (Username/CN).
- * return 1 se mTLS, 0 se TLS Semplice, -1 errore.
+ * Accetta una connessione in ingresso, esegue l'handshake TLS e identifica il client.
+ * Restituisce l'SSL* attivo tramite out_ssl: ogni thread avrà il suo oggetto SSL*.
+ * Il chiamante deve chiamare vault_service_close_client(ssl) quando ha finito.
  */
-int vault_service_accept_client(char *out_fp, size_t fp_len, char *out_user, size_t user_len) {
-    int client_fd = accept_client(listen_fd);
+int vault_service_accept_client(char *out_fp, size_t fp_len,
+                                char *out_user, size_t user_len,
+                                SSL **out_ssl){
+
+    // **out_ssl serve per restituire al chiamante l'oggetto SSL* creato per questa connessione.
+    // con *out_ssl si accede al contenuto del puntatore.
+    *out_ssl = NULL; //Inizialmente nullo.
+
+    
+    int client_fd = accept_client(listen_fd); //Chiamata bloccante.
     if (client_fd < 0) return -1;
 
-    // Tenta l'handshake TLS
-    current_client_ssl = accept_tls_connection(server_ctx, client_fd);
-    if (!current_client_ssl) {
+    // Elevazione a TLS
+    SSL *ssl = accept_tls_connection(server_ctx, client_fd); 
+    // ssl -> oggetto TLS in memoria
+    if (!ssl) {
         close_socket(client_fd);
         return -1;
     }
 
-    int res = get_client_full_identity(current_client_ssl, out_user, user_len, out_fp, fp_len);
-    
+    int res = get_client_full_identity(ssl, out_user, user_len, out_fp, fp_len);
+
     if (res == 1) {
         printf("[+] Service: Connessione mTLS stabilita.\n");
         printf("[*] User: %s | FP: %.16s...\n", out_user, out_fp);
     } else if (res == 0) {
         printf("[!] Service: Connessione anonima (Fase Enrollment).\n");
-    } else{ 
+    } else {
         printf("[-] Service: Errore durante l'identificazione del client.\n");
-        vault_service_close_client();
-    }
-
-    return res; 
-}
-
-// --- LOGICA DI ENROLLMENT ---
-
-int vault_service_process_enrollment(const char *user, const char *otp, const char *csr_content) {
-    
-    // 1. Validazione OTP
-    if (dal_verify_and_burn_otp(user, otp) != 0) {
-        vault_service_send_data("ERROR|OTP errato o scaduto");
+        vault_service_close_client(ssl);
         return -1;
     }
 
-    //2. Elaborazione CSR
-    //Il client ha mandato la CSR come stringa PEM, ma il server deve convertirla in un oggetto che OpenSSL capisce
-    BIO *bio = BIO_new_mem_buf(csr_content, -1); //Astrazione di I/O di OpenSSL, per leggere dalla memoria
-    X509_REQ *csr = PEM_read_bio_X509_REQ(bio, NULL, NULL, NULL); //// Trasformiamo quel buffer in una struttura X509_REQ (la vera CSR crittografica)
+    *out_ssl = ssl;
+    return res;
+}
+
+void vault_service_close_client(SSL *ssl) {
+    if (!ssl) return;
+    int fd = SSL_get_fd(ssl);
+    SSL_shutdown(ssl);
+    SSL_free(ssl);
+    if (fd != -1) close_socket(fd);
+}
+
+
+/* ========================================================================= *
+ * I/O DI RETE (thread-safe: ogni chiamata opera sul proprio SSL*)           *
+ * ========================================================================= */
+
+int vault_service_read_data(SSL *ssl, char *buffer, int max_len) {
+    if (!ssl) return -1;
+    return SSL_read(ssl, buffer, max_len);
+}
+
+int vault_service_send_data(SSL *ssl, const char *data) {
+    if (!ssl || !data) return -1;
+    return SSL_write(ssl, data, strlen(data));
+}
+
+
+/* ========================================================================= *
+ * LOGICA DI ENROLLMENT                                                      *
+ * ========================================================================= */
+
+int vault_service_request_enrollment(const char *user, const char *otp) {
+    return dal_save_pending_request(user, otp);
+}
+
+int vault_service_process_enrollment(SSL *ssl, const char *user,
+                                     const char *otp, const char *csr_content)
+{
+    // 1. Validazione OTP
+    if (dal_verify_and_burn_otp(user, otp) != 0) {
+        vault_service_send_data(ssl, "ERROR|OTP errato o scaduto");
+        return -1;
+    }
+
+    // 2. Parsing della CSR PEM
+    BIO *bio = BIO_new_mem_buf(csr_content, -1);
+    X509_REQ *csr = PEM_read_bio_X509_REQ(bio, NULL, NULL, NULL);
     BIO_free(bio);
 
     if (!csr) {
-        vault_service_send_data("ERROR|CSR malformata o illeggibile");
+        vault_service_send_data(ssl, "ERROR|CSR malformata o illeggibile");
         return -1;
     }
 
-    // Usiamo l'utility get_csr_fingerprint per scavare nella CSR e fare l'hash della Public Key, 
-    //così da ottenere un identificatore univoco (Fingerprint)
+    // 3. Calcolo del fingerprint della chiave pubblica
     char fingerprint[65];
     if (get_csr_fingerprint(csr, fingerprint, sizeof(fingerprint)) != 0) {
         X509_REQ_free(csr);
@@ -93,23 +147,19 @@ int vault_service_process_enrollment(const char *user, const char *otp, const ch
     }
     X509_REQ_free(csr);
 
-    // 3. --- CONTROLLI DI SICUREZZA NEL DATABASE ---
-    // A. Questa chiave è già registrata?
+    // 4. Controlli di sicurezza nel database
     if (dal_fingerprint_exists(fingerprint)) {
-        vault_service_send_data("ERROR|Chiave già stata registrata");
+        vault_service_send_data(ssl, "ERROR|Chiave già registrata");
+        return -1;
+    }
+    if (dal_username_taken(user)) {
+        vault_service_send_data(ssl, "ERROR|Username occupato");
         return -1;
     }
 
-    // B. Questo username è già stato preso da un'altra chiave?
-    if (dal_username_taken(user)) { //Evitiamo caos nel database
-        vault_service_send_data("ERROR|Username occupato");
-        return -1;
-    }
-
-    // 4. Se i controlli passano, salviamo la CSR temporaneamente e firmiamo
-    // Usiamo il FINGERPRINT come nome file per evitare collisioni 
+    // 5. Salvataggio CSR e firma da parte della PKI
     char csr_path[256], cert_path[256];
-    snprintf(csr_path, sizeof(csr_path), "certs/%s.csr", fingerprint);
+    snprintf(csr_path,  sizeof(csr_path),  "certs/%s.csr", fingerprint);
     snprintf(cert_path, sizeof(cert_path), "certs/%s.crt", fingerprint);
 
     FILE *f = fopen(csr_path, "w");
@@ -117,76 +167,41 @@ int vault_service_process_enrollment(const char *user, const char *otp, const ch
     fputs(csr_content, f);
     fclose(f);
 
-    //Chiamiamo la PKI per firmare, CA userà la ca.key per generare il .crt
-    if (pki_sign_client_request(fingerprint) != 0) { 
-        //Passo fingerprint come identificatore per il file in cui è salvata la CSR (fingerprint.csr)
-        vault_service_send_data("ERROR|Errore interno della PKI");
+    if (pki_sign_client_request(fingerprint) != 0) {
+        vault_service_send_data(ssl, "ERROR|Errore interno della PKI");
         return -1;
     }
 
-    // 5. REGISTRAZIONE NEL DATABASE
-    // Colleghiamo ufficialmente Fingerprint <-> Username
+    // 6. Registrazione nel database
     if (dal_register_user(fingerprint, user) != 0) {
-        vault_service_send_data("ERROR|Errore salvataggio database");
+        vault_service_send_data(ssl, "ERROR|Errore salvataggio database");
         return -1;
     }
 
-    // 6. Invio del certificato al client
-    FILE *fc = fopen(cert_path, "r"); //Apriamo il certificato appena creato per leggerne il contenuto e inviarlo al client
+    // 7. Invio del certificato firmato al client
+    FILE *fc = fopen(cert_path, "r");
     if (!fc) return -1;
     char cert_buf[4096];
-    size_t n = fread(cert_buf, 1, sizeof(cert_buf)-1, fc);
+    size_t n = fread(cert_buf, 1, sizeof(cert_buf) - 1, fc);
     cert_buf[n] = '\0';
     fclose(fc);
 
-    printf("[+] Service: Enroll completato per user '%s' con FP %.16s...\n", user, fingerprint);
+    printf("[+] Service: Enroll completato per user '%s' con FP %.16s...\n",
+           user, fingerprint);
 
-    // Inviamo i dati, ma non usiamo il numero di byte come successo della funzione
-    if (vault_service_send_data(cert_buf) <= 0) {
-        return -1; // Qui c'è stato un vero errore di rete
-    }
-
-    return 0; // SUCCESSO: La funzione ha finito il suo lavoro correttamente
+    if (vault_service_send_data(ssl, cert_buf) <= 0) return -1;
+    return 0;
 }
 
-// Salvataggio: passiamo il fingerprint per scrivere nel file vaults/[fp].dat
+
+/* ========================================================================= *
+ * LOGICA DI BUSINESS (VAULT)                                                *
+ * ========================================================================= */
+
 int vault_service_save_credential(const char *fp, const char *svc, const char *blob) {
-    // Il Service non deve sapere COME viene salvato, lo chiede al DAL
     return dal_save_record(fp, svc, blob);
 }
 
-// Recupero: passiamo il fingerprint per leggere dal file vaults/[fp].dat
-char* vault_service_get_all(const char *fp) {
-    // Restituisce la stringa formattata con tutti i segreti dell'utente
+char *vault_service_get_all(const char *fp) {
     return dal_fetch_all_records(fp);
-}
-
-int vault_service_read_data(char *buffer, int max_len) {
-    if (!current_client_ssl) return -1;
-    return SSL_read(current_client_ssl, buffer, max_len);
-}
-
-int vault_service_send_data(const char *data) {
-    if (!current_client_ssl || !data) return -1;
-    return SSL_write(current_client_ssl, data, strlen(data));
-}
-
-void vault_service_close_client() {
-    if (current_client_ssl) {
-        int fd = SSL_get_fd(current_client_ssl);
-        SSL_shutdown(current_client_ssl);
-        SSL_free(current_client_ssl);
-        if (fd != -1) close_socket(fd);
-        current_client_ssl = NULL;
-    }
-}
-
-void vault_service_shutdown() {
-    if (server_ctx) SSL_CTX_free(server_ctx);
-    if (listen_fd != -1) close_socket(listen_fd);
-    cleanup_openssl();
-}
-
-int vault_service_request_enrollment(const char *user, const char *otp) {
-    return dal_save_pending_request(user, otp);
 }
