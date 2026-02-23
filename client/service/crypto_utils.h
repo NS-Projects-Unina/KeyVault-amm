@@ -30,9 +30,7 @@ int crypto_load_usb_key(const char *path, unsigned char *out_key);
 // Trasforma una password testuale in una chiave AES-256 usando PBKDF2
 int crypto_derive_from_password(const char *password, unsigned char *out_key);
 
-
 // --- OPERAZIONI DI CIFRATURA ---
-
 // Cifra il plaintext e restituisce un blob: [IV (16 byte) + DATI CIFRATI]
 int crypto_encrypt(const unsigned char *plaintext, int plaintext_len, 
                    const unsigned char *key, unsigned char *out_buffer);

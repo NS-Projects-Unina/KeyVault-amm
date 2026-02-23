@@ -14,7 +14,7 @@ static int is_crypto_ready = 0;
 
 // Inizializza la connessione mTLS
 int client_service_init_session() {
-    // 1. PULIZIA PREVENTIVA: Se esistono vecchi residui, chiudiamoli
+    // 1. PULIZIA PREVENTIVA E RESET DELLO STATO
     if (active_ssl) {
         SSL_shutdown(active_ssl);
         SSL_free(active_ssl);
@@ -78,7 +78,7 @@ int client_service_store_data_encrypted(const char *svc, const char *pass, char 
     return -1;
 }
 
-// FETCH: Funzione unica e generica. Accetta un puntatore a funzione (callback)
+// FETCH: accetta un puntatore a funzione (callback)
 void client_service_fetch_vault(void (*data_handler)(const char *svc, const char *pass)) {
     if (!active_ssl || !is_crypto_ready || !data_handler) return;
 
@@ -110,7 +110,7 @@ void client_service_fetch_vault(void (*data_handler)(const char *svc, const char
             if (decrypted_len > 0) {
                 decrypted_pass[decrypted_len] = '\0';
                 // Passa i dati decifrati al gestore (GUI o CLI)
-                data_handler(svc, (const char*)decrypted_pass);
+                data_handler(svc, (const char*)decrypted_pass); //Funzione passata dall'argomento
             }
             free(ciphertext);
         }
