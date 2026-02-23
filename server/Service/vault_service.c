@@ -1,5 +1,5 @@
 #include "vault_service.h"
-#include "ssl.h"
+#include "ssl_server.h"
 #include "network.h"
 #include "pki.h"
 #include "dal.h"
@@ -21,7 +21,17 @@ int vault_service_init_system() {
     init_openssl();
 
     // Creiamo le risorse temporaneamente
-    SSL_CTX *ctx = create_server_ctx("certs/server.crt", "certs/server.key", "certs/ca.crt");
+    SSL_CTX *ctx = create_server_ctx(
+    "server_storage/certs/server.crt", 
+    "server_storage/certs/server.key", 
+    "server_storage/certs/ca.crt"
+    );
+    // FONDAMENTALE: Controllo anti-crash
+    if (ctx == NULL) {
+        fprintf(stderr, "[-] ERRORE FATALE: Impossibile creare il contesto SSL.\n");
+        fprintf(stderr, "    Verifica che i file esistano in 'server_storage/certs/'\n");
+        exit(EXIT_FAILURE); 
+    }
     int fd = create_tcp_socket();
     
     if (bind_socket(fd, 8080) < 0) return -1;
@@ -61,7 +71,6 @@ int vault_service_accept_client(char *out_fp, size_t fp_len,
     
     int client_fd = accept_client(sys->listen_fd); //Chiamata bloccante.
     if (client_fd < 0) return -1;
-
     // Elevazione a TLS
     SSL *ssl = accept_tls_connection(sys->server_ctx, client_fd); 
     // ssl -> oggetto TLS in memoria
@@ -122,6 +131,7 @@ int vault_service_request_enrollment(const char *user, const char *otp) {
 int vault_service_process_enrollment(SSL *ssl, const char *user,
                                      const char *otp, const char *csr_content)
 {
+    printf("[DEBUG] Tentativo Enroll - User: '%s', OTP: '%s'\n", user, otp);
     // 1. Validazione OTP
     if (dal_verify_and_burn_otp(user, otp) != 0) {
         vault_service_send_data(ssl, "ERROR|OTP errato o scaduto");
@@ -158,8 +168,8 @@ int vault_service_process_enrollment(SSL *ssl, const char *user,
 
     // 5. Salvataggio CSR e firma da parte della PKI
     char csr_path[256], cert_path[256];
-    snprintf(csr_path,  sizeof(csr_path),  "certs/%s.csr", fingerprint);
-    snprintf(cert_path, sizeof(cert_path), "certs/%s.crt", fingerprint);
+    snprintf(csr_path,  sizeof(csr_path),  SERVER_CERTS_PATH "%s.csr", fingerprint);
+    snprintf(cert_path, sizeof(cert_path), SERVER_CERTS_PATH "%s.crt", fingerprint);
 
     FILE *f = fopen(csr_path, "w");
     if (!f) return -1;

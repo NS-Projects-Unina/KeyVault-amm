@@ -6,85 +6,100 @@
 
 void init_pki_directory() {
     struct stat st = {0};
-    if (stat("certs", &st) == -1) { 
-        printf("[*] Creazione directory 'certs/' per la PKI...\n");
-        mkdir("certs", 0700);
+    // Creiamo la struttura a due livelli: server_storage/certs/
+    if (stat(SERVER_BASE_DIR, &st) == -1) {
+        mkdir(SERVER_BASE_DIR, 0700);
+    }
+
+    if (stat(SERVER_CERTS_PATH, &st) == -1) { 
+        printf("[*] Creazione directory privata server: '%s'\n", SERVER_CERTS_PATH);
+        mkdir(SERVER_CERTS_PATH, 0700);
     }
 }
 
 void setup_server_infrastructure() {
     init_pki_directory();
-    if (access("certs/ca.crt", F_OK) != -1) {
-        printf("[+] Infrastruttura PKI Server già presente. Avvio...\n");
+    
+    // Controllo esistenza nella cartella privata
+    if (access(SERVER_CERTS_PATH "ca.crt", F_OK) != -1) {
+        printf("[+] Infrastruttura PKI Server presente in %s. Avvio...\n", SERVER_CERTS_PATH);
         return;
     }
 
-    printf("[!] Prima esecuzione: Generazione Root CA e identità Server...\n");
+    printf("[!] Prima esecuzione: Generazione Root CA e identità Server in storage isolato...\n");
 
-    system("openssl req -x509 -newkey rsa:4096 -keyout certs/ca.key -out certs/ca.crt -days 365 -nodes -subj '/CN=KeyVault Root CA' 2>/dev/null");
-    system("openssl genrsa -out certs/server.key 2048 2>/dev/null");
-    system("openssl req -new -key certs/server.key -out certs/server.csr -subj '/CN=KeyVault Server' 2>/dev/null");
-    system("openssl x509 -req -in certs/server.csr -CA certs/ca.crt -CAkey certs/ca.key -CAcreateserial -out certs/server.crt -days 365 2>/dev/null");
+    // 1. Generazione Root CA (Certificato + Chiave Privata)
+    system("openssl req -x509 -newkey rsa:4096 "
+           "-keyout " SERVER_CERTS_PATH "ca.key "
+           "-out " SERVER_CERTS_PATH "ca.crt "
+           "-days 365 -nodes -subj '/CN=KeyVault Root CA' 2>/dev/null");
 
-    system("rm -f certs/*.csr");
-    printf("[+] Infrastruttura Server completata con successo!\n");
+    // 2. Generazione Chiave Privata del Server
+    system("openssl genrsa -out " SERVER_CERTS_PATH "server.key 2048 2>/dev/null");
+
+    // 3. Generazione CSR per il Server
+    system("openssl req -new -key " SERVER_CERTS_PATH "server.key "
+           "-out " SERVER_CERTS_PATH "server.csr -subj '/CN=KeyVault Server' 2>/dev/null");
+
+    // 4. Firma del certificato Server tramite la propria CA
+    system("openssl x509 -req -in " SERVER_CERTS_PATH "server.csr "
+           "-CA " SERVER_CERTS_PATH "ca.crt -CAkey " SERVER_CERTS_PATH "ca.key "
+           "-CAcreateserial -out " SERVER_CERTS_PATH "server.crt -days 365 2>/dev/null");
+
+    // Pulizia dei file temporanei nella cartella privata
+    system("rm -f " SERVER_CERTS_PATH "*.csr");
+    printf("[+] Infrastruttura Server completata con successo in: %s\n", SERVER_CERTS_PATH);
 }
-
-
 
 int pki_generate_csr(const char *username) {
     char command[512];
-    init_pki_directory();
+    
+    // Il client deve assicurarsi che la sua cartella esista
+    mkdir("client_storage", 0700);
+    mkdir(CLIENT_CERTS_PATH, 0700);
 
-    //Genera chiave privata RSA a 2048 bit e salva in certs/username.key
-    snprintf(command, sizeof(command), "openssl genrsa -out certs/%s.key 2048 2>/dev/null", username); //2>dev/null serve a nascondere i log OpenSSL
+    // 1. Genera la chiave privata nella cartella del client
+    snprintf(command, sizeof(command), 
+             "openssl genrsa -out " CLIENT_CERTS_PATH "%s.key 2048 2>/dev/null", 
+             username);
     system(command);
 
-    //Attiviamo il modulo di OpenSSL dedicato alla gestione delle X.509 Certificate Signing Request
+    // 2. Genera la CSR nella cartella del client
     snprintf(command, sizeof(command), 
-             "openssl req -new -key certs/%s.key -out certs/%s.csr -subj '/CN=%s' 2>/dev/null", 
+             "openssl req -new -key " CLIENT_CERTS_PATH "%s.key -out " CLIENT_CERTS_PATH "%s.csr -subj '/CN=%s' 2>/dev/null", 
              username, username, username);
-    /*
-        -new -> new request da 0
-        -key certs/%s.key, dice a Open SSL di firmare la richiesta con la chiave privata, così da autenticare il client
-        -out certs/%s.csr -> output della CSR in un file
-        -subj -> specifica i campi del subject della CSR, solo CN (Common Name).
-    */
-
-    //CSR composta da: chiave pubblica, informazioni Subject (CN=username), e firma digitale con la chiave privata del client (certs/username.key)
-    //Quando il server riceverà questa CSR, potrà verificarne l'autenticità usando la chiave pubblica contenuta nella CSR stessa, e poi firmarla con la CA se tutto è in regola.
-
 
     return system(command);
 }
 
 
 int pki_sign_client_request(const char *identifier) {
-    // Identifier è il FINGERPRINT della chiave pubblica del client, usato come nome univoco per i file .csr e .crt
-    // I file che verranno creati saranno certs/identifier.csr e certs/identifier.crt, che rimarranno così sul server.
-    char command[512];
+    char command[1024];
 
-    // Verifica che il server possieda la chiave privata della CA
-    if (access("certs/ca.key", F_OK) == -1) {
-        fprintf(stderr, "[-] Errore Fatale: Root CA non trovata sul server.\n");
+    // Il server cerca la CA nella sua cartella privata
+    if (access(SERVER_CERTS_PATH "ca.key", F_OK) == -1) {
+        fprintf(stderr, "[-] Errore Fatale: Root CA non trovata in %s.\n", SERVER_CERTS_PATH);
         return -1;
     }
 
-    printf("[*] PKI: Ricevuta richiesta CSR. Avvio procedura di firma per '%s'...\n", identifier);
-    // Firma la CSR usando ca.crt e ca.key
+    printf("[*] PKI: Avvio procedura di firma per '%s' usando CA in %s...\n", identifier, SERVER_CERTS_PATH);
+    
+    // Firma la CSR (che il server ha ricevuto e salvato temporaneamente nello storage)
+    // usando il certificato e la chiave della CA del server
     snprintf(command, sizeof(command), 
-             "openssl x509 -req -in certs/%s.csr -CA certs/ca.crt -CAkey certs/ca.key "
-             "-CAcreateserial -out certs/%s.crt -days 365 2>/dev/null", 
+             "openssl x509 -req -in " SERVER_CERTS_PATH "%s.csr "
+             "-CA " SERVER_CERTS_PATH "ca.crt -CAkey " SERVER_CERTS_PATH "ca.key "
+             "-CAcreateserial -out " SERVER_CERTS_PATH "%s.crt -days 365 2>/dev/null", 
              identifier, identifier);
     
     int res = system(command);
 
-    // Pulizia: la CSR del client non ci serve più sul server una volta firmata
-    snprintf(command, sizeof(command), "rm -f certs/%s.csr", identifier);
+    // Pulizia della CSR temporanea sul server
+    snprintf(command, sizeof(command), "rm -f " SERVER_CERTS_PATH "%s.csr", identifier);
     system(command);
 
     if (res == 0) {
-        printf("[+] PKI: Certificato '%s.crt' generato e firmato con successo!\n", identifier);
+        printf("[+] PKI: Certificato '" SERVER_CERTS_PATH "%s.crt' generato con successo!\n", identifier);
         return 0;
     } else {
         fprintf(stderr, "[-] PKI: Errore durante la generazione del certificato.\n");

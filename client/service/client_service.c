@@ -2,7 +2,7 @@
 #include "client_utils.h"
 #include "client_context.h" // Obbligatorio per gestire lo stato
 #include "crypto_utils.h"
-#include "ssl.h"
+#include "ssl_client.h"
 #include "network.h"
 #include <string.h>
 #include <stdlib.h>
@@ -38,14 +38,15 @@ int client_service_init_session() {
     const char *username = client_context_get_username();
   
     //Spostare in una funzione utils
-    char cert_path[256], key_path[256];
-    snprintf(cert_path, sizeof(cert_path), "certs/%s.crt", username);
-    snprintf(key_path, sizeof(key_path), "certs/%s.key", username);
+    char cert_path[256], key_path[256], ca_path[256];
+    snprintf(cert_path, sizeof(cert_path), CLIENT_CERTS_DIR "%s.crt", username);
+    snprintf(key_path, sizeof(key_path), CLIENT_CERTS_DIR "%s.key", username);
+    snprintf(ca_path, sizeof(ca_path), CLIENT_CERTS_DIR "ca.crt");
     if (access(cert_path, F_OK) == -1) return -1;
 
 
     init_openssl();
-    SSL_CTX *ctx = create_client_mtls_ctx(cert_path, key_path, "certs/ca.crt");
+    SSL_CTX *ctx = create_client_mtls_ctx(cert_path, key_path, ca_path);
     if (!ctx) return -1;
     
     // 2. CONNESSIONE USANDO IL CONTEXT
@@ -151,4 +152,66 @@ void client_service_close_session() {
         client_context_set_sockfd(-1);
     }
     cleanup_openssl();
+}
+
+
+//Forse da spostare in utils.
+int client_service_has_ca() {
+    // Il Service conosce il percorso perché usa le definizioni di pki.h
+    return (access("client_storage/certs/ca.crt", F_OK) == 0);
+}
+/**
+ * Importa il certificato CA da un percorso sorgente allo storage isolato del client.
+ * Nasconde alla GUI i dettagli del buffer e della destinazione finale.
+ * @return 0 in caso di successo, -1 in caso di errore.
+ */
+int client_service_import_ca(const char *source_path) {
+    char buffer[8192]; // Buffer per il PEM del certificato
+
+    // 1. Assicuriamoci che la struttura delle cartelle esista
+    ensure_certs_dir();
+
+    // 2. Leggiamo il file dalla sorgente (es. la chiavetta USB dell'admin)
+    if (load_file_to_buffer(source_path, buffer, sizeof(buffer)) != 0) {
+        fprintf(stderr, "[-] Service: Impossibile leggere il file sorgente %s\n", source_path);
+        return -1;
+    }
+
+    // 3. Salviamolo nella destinazione protetta del client
+    // Il percorso è ora cablato qui, invisibile alla GUI.
+    if (save_buffer_to_file(CLIENT_CERTS_DIR "ca.crt", buffer) != 0) {
+        fprintf(stderr, "[-] Service: Errore nel salvataggio locale della CA.\n");
+        return -1;
+    }
+
+    printf("[+] Service: CA importata con successo in %s\n", CLIENT_CERTS_DIR);
+    return 0;
+}
+
+int client_service_unlock_with_password(const char *password) {
+    unsigned char derived_key[32];
+    // PBKDF2: Trasforma la password in chiave robusta
+    if (crypto_derive_from_password(password, derived_key) == 0) {
+        client_context_set_session_key(derived_key);
+        return 0;
+    }
+    return -1;
+}
+
+int client_service_unlock_with_usb(const char *path) {
+    unsigned char loaded_key[32];
+    // Lettura diretta dei 32 byte di entropia
+    if (crypto_load_usb_key(path, loaded_key) == 0) {
+        client_context_set_session_key(loaded_key);
+        return 0;
+    }
+    return -1;
+}
+
+int client_service_generate_new_usb_key(const char *path) {
+    // Chiama la crypto_utils (il service può farlo, la GUI no)
+    if (crypto_generate_usb_key(path) == 0) {
+        return client_service_unlock_with_usb(path); // La carica anche subito
+    }
+    return -1;
 }

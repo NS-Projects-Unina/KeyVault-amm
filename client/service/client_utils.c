@@ -28,11 +28,12 @@ int save_buffer_to_file(const char *path, const char *buffer) {
 
 void ensure_certs_dir() {
     struct stat st = {0};
-    if (stat("certs", &st) == -1) {
-        #ifdef _WIN32
-            mkdir("certs");
-        #else
-            mkdir("certs", 0700); // Permessi restrittivi per sicurezza
-        #endif
+    // Crea la cartella base se manca
+    if (stat(CLIENT_STORAGE_DIR, &st) == -1) {
+        mkdir(CLIENT_STORAGE_DIR, 0700);
+    }
+    // Crea la sottocartella certs
+    if (stat(CLIENT_CERTS_DIR, &st) == -1) {
+        mkdir(CLIENT_CERTS_DIR, 0700);
     }
 }

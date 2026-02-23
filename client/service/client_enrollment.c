@@ -3,7 +3,7 @@
 
 #include "client_context.h" 
 
-#include "ssl.h"
+#include "ssl_client.h"
 #include "pki.h"
 #include "network.h"
 
@@ -23,18 +23,25 @@ int client_service_needs_enrollment() {
         username = client_context_get_username();
     }
 
-    snprintf(cert_path, sizeof(cert_path), "certs/%s.crt", username);
+    snprintf(cert_path, sizeof(cert_path), CLIENT_CERTS_DIR "%s.crt", username);
     // Se il file .crt non esiste, l'utente deve registrarsi
     return (access(cert_path, F_OK) == -1);
 }
 
 int client_service_request_enrollment(const char *user) {
     ensure_certs_dir();
-    
+    char ca_path[] = CLIENT_CERTS_DIR "ca.crt";
+
+    // --- LOGICA OUT-OF-BAND ---
+    if (access(ca_path, F_OK) == -1) {
+        fprintf(stderr, "[-] ERRORE OOB: ca.crt non trovato in %s\n", CLIENT_CERTS_DIR);
+        return -1;
+    }
+
     char response[1024], command[256];
     
     init_openssl();
-    SSL_CTX *tmp_ctx = create_client_basic_ctx("certs/ca.crt");
+    SSL_CTX *tmp_ctx = create_client_basic_ctx(ca_path);
     if (!tmp_ctx) return -1;
 
     int tmp_fd = create_tcp_socket();
@@ -73,13 +80,13 @@ int client_service_perform_enrollment(const char *user, const char *otp) {
     ensure_certs_dir();
 
     char csr_path[256], cert_path[256], csr_buf[4096], response[8192];
-    snprintf(csr_path, sizeof(csr_path), "certs/%s.csr", user);
-    snprintf(cert_path, sizeof(cert_path), "certs/%s.crt", user);
+    snprintf(csr_path, sizeof(csr_path), CLIENT_CERTS_DIR "%s.csr", user);
+    snprintf(cert_path, sizeof(cert_path), CLIENT_CERTS_DIR "%s.crt", user);
 
     if (pki_generate_csr(user) != 0) return -1;
     if (load_file_to_buffer(csr_path, csr_buf, sizeof(csr_buf)) != 0) return -1;
 
-    SSL_CTX *tmp_ctx = create_client_basic_ctx("certs/ca.crt");
+    SSL_CTX *tmp_ctx = create_client_basic_ctx(CLIENT_CERTS_DIR "ca.crt");
     int tmp_fd = create_tcp_socket();
     
 

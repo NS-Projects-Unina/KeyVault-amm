@@ -16,4 +16,13 @@ int client_service_store_data_encrypted(const char *svc, const char *pass, char 
 void client_service_fetch_vault(void (*data_handler)(const char *svc, const char *pass));
 void client_service_close_session(void);
 
+// Sblocco Sessione (Logica Crittografica)
+int client_service_unlock_with_password(const char *password);
+int client_service_unlock_with_usb(const char *path);
+
+
+int client_service_has_ca(void);
+int client_service_import_ca(const char *source_path);
+
+
 #endif // CLIENT_SERVICE_H

@@ -2,7 +2,6 @@
 #include "service/client_enrollment.h"
 #include "service/client_utils.h"
 #include "service/client_service.h"
-#include "service/crypto_utils.h"
 #include <gtk/gtk.h>
 
 // --- Widget Globali ---
@@ -18,6 +17,7 @@ static GtkWidget *status_intro;
 static GtkWidget *ip_entry;
 static GtkWidget *server_toggle;
 static GtkWidget *user_info_label;
+static GtkWidget *status_ca;
 
 // --- PROTOTIPI DELLE FUNZIONI DI PAGINA (Per evitare warning di dichiarazione) ---
 GtkWidget* create_intro_page();
@@ -129,15 +129,13 @@ static void on_key_ready() {
 // Deriva la chiave e, se tutto va bene, passa alla fase di connessione
 static void on_password_unlock_clicked(GtkWidget *widget, gpointer data) {
     (void)widget; (void)data;
-    // Prende il testo inserito dall'utente nel campo password
     const char *password = gtk_editable_get_text(GTK_EDITABLE(password_entry)); 
-    unsigned char derived_key[32]; 
-    // Deriva la chiave dalla password, e se va tutto bene, la imposta per la sessione e passa alla fase di connessione
-    if (crypto_derive_from_password(password, derived_key) == 0) {
-        client_service_set_session_key(derived_key);  //Questo va spostato nel service
-        on_key_ready(); //Passa alla fase di connessione
+    
+    // Deleghiamo la derivazione e l'impostazione della chiave al Service
+    if (client_service_unlock_with_password(password) == 0) {
+        on_key_ready(); // Passa alla fase di connessione
     } else {
-        gtk_label_set_text(GTK_LABEL(status_key), "[-] Errore nella derivazione.");
+        gtk_label_set_text(GTK_LABEL(status_key), "[-] Errore nella derivazione della chiave.");
     }
 }
 
@@ -147,18 +145,17 @@ static void on_usb_file_opened(GObject *source, GAsyncResult *res, gpointer data
     GtkFileDialog *dialog = GTK_FILE_DIALOG(source);
     GFile *file = gtk_file_dialog_open_finish(dialog, res, NULL);
 
-    //Questo va spostato nel service
     if (file) {
         char *path = g_file_get_path(file);
-        unsigned char loaded_key[32];
-        // Prova a caricare la chiave dal file scelto, se va tutto bene, la imposta per la sessione e passa alla fase di connessione
-        if (crypto_load_usb_key(path, loaded_key) == 0) {
-            client_service_set_session_key(loaded_key);
+        
+        // Deleghiamo il caricamento e la convalida al Service
+        if (client_service_unlock_with_usb(path) == 0) {
             on_key_ready();
         } else {
-            gtk_label_set_text(GTK_LABEL(status_key), "[-] File chiave non valido.");
+            gtk_label_set_text(GTK_LABEL(status_key), "[-] File chiave non valido o corrotto.");
         }
-        g_free(path); g_object_unref(file);
+        g_free(path); 
+        g_object_unref(file);
     }
 }
 
@@ -180,20 +177,13 @@ static void on_usb_generate_save_response(GObject *source, GAsyncResult *res, gp
     if (file) {
         char *path = g_file_get_path(file);
         
-        // Chiamata alla funzione del service per generare 32 byte di entropia
-        if (crypto_generate_usb_key(path) == 0) {
-            // Una volta generata, la carichiamo subito come chiave di sessione
-            unsigned char loaded_key[32];
-            crypto_load_usb_key(path, loaded_key);
-            client_service_set_session_key(loaded_key);
-            
-            g_print("[+] Nuova chiave generata in: %s\n", path);
-            on_key_ready(); // Prosegui verso la connessione
+        // 1. Generazione fisica (rimane crypto_utils finché non sposti anche questa)
+        if (client_service_generate_new_usb_key(path) == 0) {
+            g_print("[+] Nuova chiave generata e caricata: %s\n", path);
+            on_key_ready(); 
         } else {
-            // Gestione errore (es. permessi negati sulla USB)
-            g_warning("[-] Impossibile generare la chiave in %s", path);
+            g_warning("[-] Impossibile generare la chiave");
         }
-        
         g_free(path);
         g_object_unref(file);
     }
@@ -229,6 +219,40 @@ static void on_enroll_submit(GtkWidget *widget, gpointer data) {
 }
 
 // --- 0. LOGICA INIZIALE  ---
+
+// --- LOGICA IMPORTAZIONE CA (Passo 0) ---
+
+// Callback per la selezione del file CA tramite FileDialog
+
+static void on_ca_file_selected(GObject *source, GAsyncResult *res, gpointer data) {
+    (void)data;
+    GtkFileDialog *dialog = GTK_FILE_DIALOG(source);
+    GFile *file = gtk_file_dialog_open_finish(dialog, res, NULL);
+
+    if (file) {
+        char *path = g_file_get_path(file);
+        
+        // La GUI passa solo l'ordine al Service
+        if (client_service_import_ca(path) == 0) {
+            gtk_label_set_text(GTK_LABEL(status_ca), "Certificato CA importato!");
+            gtk_stack_set_visible_child_name(GTK_STACK(stack), "intro_page");
+        } else {
+            gtk_label_set_text(GTK_LABEL(status_ca), "Errore durante l'importazione.");
+        }
+
+        g_free(path); 
+        g_object_unref(file);
+    }
+}
+
+static void on_import_ca_clicked(GtkWidget *widget, gpointer data) {
+    (void)data;
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, "Seleziona il certificato ca.crt ricevuto dall'Admin");
+    gtk_file_dialog_open(dialog, GTK_WINDOW(gtk_widget_get_root(widget)), NULL, on_ca_file_selected, NULL);
+}
+
+
 // In gui_handlers.c
 void on_start_clicked(GtkWidget *widget, gpointer data) {
     (void)widget; (void)data;
@@ -256,18 +280,24 @@ static void on_server_toggle_changed(GtkSwitch *sw, gpointer data) {
     gtk_widget_set_sensitive(ip_entry, gtk_switch_get_active(sw));
 }
 
+
 static void on_config_done(GtkWidget *widget, gpointer data) {
     (void)widget; (void)data;
-  // 1. Recupero IP
+    
+    // 1. Comando al service per impostare l'IP
     const char *final_ip = gtk_switch_get_active(GTK_SWITCH(server_toggle)) ? 
                            gtk_editable_get_text(GTK_EDITABLE(ip_entry)) : "127.0.0.1";
-
-    //2. Salvataggio
     client_service_set_server_config(final_ip);
 
-    gtk_stack_set_visible_child_name(GTK_STACK(stack), "intro_page");
+    // 2. Interrogazione del Service per la CA
+    if (client_service_has_ca()) {
+        // Se la CA c'è, proseguiamo alla intro
+        gtk_stack_set_visible_child_name(GTK_STACK(stack), "intro_page");
+    } else {
+        // Se manca, forziamo l'utente a passare per la pagina di importazione
+        gtk_stack_set_visible_child_name(GTK_STACK(stack), "ca_page"); 
+    }
 }
-
 // --- COSTRUZIONE UI ---
 
 // Creazione della nuova pagina di configurazione
@@ -486,6 +516,31 @@ GtkWidget* create_persistent_header() {
     return header;
 }
 
+GtkWidget* create_ca_setup_page() {
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 20);
+    gtk_widget_set_halign(box, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(box, GTK_ALIGN_CENTER);
+
+    GtkWidget *title = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(title), "<span size='large' weight='bold'>Passo 0: Verifica Autorità (CA)</span>");
+    gtk_box_append(GTK_BOX(box), title);
+
+    GtkWidget *desc = gtk_label_new("Per connettersi in sicurezza, il client necessita del certificato pubblico della CA.\n"
+                                   "Seleziona il file 'ca.crt' che ti è stato fornito fuori dal canale di rete.");
+    gtk_label_set_justify(GTK_LABEL(desc), GTK_JUSTIFY_CENTER);
+    gtk_box_append(GTK_BOX(box), desc);
+
+    GtkWidget *btn_import = gtk_button_new_with_label("Importa Certificato CA");
+    gtk_widget_add_css_class(btn_import, "suggested-action");
+    g_signal_connect(btn_import, "clicked", G_CALLBACK(on_import_ca_clicked), NULL);
+    gtk_box_append(GTK_BOX(box), btn_import);
+
+    status_ca = gtk_label_new("Stato: CA mancante");
+    gtk_box_append(GTK_BOX(box), status_ca);
+
+    return box;
+}
+
 void setup_main_window(GtkApplication *app) { 
     // 1. Creazione della finestra principale
     GtkWidget *window = gtk_application_window_new(app); 
@@ -511,6 +566,7 @@ void setup_main_window(GtkApplication *app) {
 
     // 5. REGISTRAZIONE DELLE PAGINE
     gtk_stack_add_named(GTK_STACK(stack), create_config_page(), "config_page");
+    gtk_stack_add_named(GTK_STACK(stack), create_ca_setup_page(), "ca_page");
     gtk_stack_add_named(GTK_STACK(stack), create_intro_page(), "intro_page");
     gtk_stack_add_named(GTK_STACK(stack), create_enrollment_page(), "enroll_page");
     gtk_stack_add_named(GTK_STACK(stack), create_key_select_page(), "key_page");
