@@ -1,5 +1,6 @@
 #include "client_service.h"
 #include "client_utils.h"
+#include "client_context.h"
 #include "crypto_utils.h"
 #include "ssl.h"
 #include "network.h"
@@ -11,6 +12,11 @@ static SSL *active_ssl = NULL;
 static int active_sockfd = -1;
 static unsigned char session_key[AES_KEY_LEN];
 static int is_crypto_ready = 0;
+
+void client_service_set_server_config(const char *ip) {
+    // Il Service riceve l'ordine dalla GUI e lo inoltra allo strato inferiore
+    client_context_set_server_ip(ip);
+}
 
 // Inizializza la connessione mTLS
 int client_service_init_session() {
@@ -39,7 +45,10 @@ int client_service_init_session() {
     if (!ctx) return -1;
     
     active_sockfd = create_tcp_socket();
-    if (connect_to_server(active_sockfd, "127.0.0.1", 8080) < 0) {
+    const char *ip = client_context_get_server_ip();
+    int port = client_context_get_server_port();
+
+    if (connect_to_server(active_sockfd, ip, port) < 0) {
         SSL_CTX_free(ctx);
         return -1;
     }

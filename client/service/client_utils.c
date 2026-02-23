@@ -1,4 +1,5 @@
 #include "client_utils.h"
+#include <sys/stat.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <pwd.h>
@@ -23,4 +24,15 @@ int save_buffer_to_file(const char *path, const char *buffer) {
     fputs(buffer, f);
     fclose(f);
     return 0;
+}
+
+void ensure_certs_dir() {
+    struct stat st = {0};
+    if (stat("certs", &st) == -1) {
+        #ifdef _WIN32
+            mkdir("certs");
+        #else
+            mkdir("certs", 0700); // Permessi restrittivi per sicurezza
+        #endif
+    }
 }

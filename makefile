@@ -4,7 +4,7 @@ CC = gcc
 GTK_CFLAGS := $(shell pkg-config --cflags gtk4)
 GTK_LIBS   := $(shell pkg-config --libs gtk4)
 
-# CFLAGS: aggiungiamo le flag di GTK e il path del client per trovare gui_manager.h
+# CFLAGS: aggiungiamo i nuovi path per trovare gli header nelle sottocartelle
 CFLAGS = -Wall -Wextra -g \
          -I./network \
          -I./ssl \
@@ -12,19 +12,19 @@ CFLAGS = -Wall -Wextra -g \
          -I./server/Controller \
          -I./server/Service \
          -I./server/Dal \
-         -I./client/controller \
-         -I./client/service \
          -I./client \
+         -I./client/context \
+         -I./client/gui_manager \
+         -I./client/service \
          $(GTK_CFLAGS)
 
-# LDFLAGS: SSL, Crypto e ora tutte le librerie grafiche di GTK 4
+# LDFLAGS: SSL, Crypto e GTK 4
 LDFLAGS = -lssl -lcrypto $(GTK_LIBS)
 PORT = 8080
 
 all: server_app client_app
 
 # --- COMPILAZIONE DEL SERVER ---
-# Nota: il server non usa GTK, quindi filtriamo LDFLAGS per non appesantirlo
 server_app: server/server_main.c \
             network/network.c \
             ssl/ssl.c \
@@ -34,10 +34,11 @@ server_app: server/server_main.c \
             server/Dal/dal.c
 	$(CC) $(CFLAGS) $^ -o $@ -lssl -lcrypto
 
-
 # --- COMPILAZIONE DEL CLIENT (GUI) ---
-# RIMOSSO: client/controller/controller.c
+# AGGIUNTO: client/context/client_context.c
+# NOTA: client_utils.c è già incluso e ora contiene ensure_certs_dir
 client_app: client/client_main.c \
+            client/context/client_context.c \
             client/gui_manager/gui_manager.c \
             client/service/client_utils.c \
             client/service/client_enrollment.c \

@@ -3,6 +3,9 @@
 
 #include <stddef.h>
 
+// Aggiungi il prototipo
+void client_service_set_server_config(const char *ip);
+
 // Inizializzazione sessione mTLS
 int client_service_init_session();
 

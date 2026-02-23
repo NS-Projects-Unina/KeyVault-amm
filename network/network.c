@@ -103,6 +103,7 @@ int connect_to_server(int sockfd, const char *ip, int port) {
         return -1;
     }
 
+    
     printf("[*] Iniziando il Three-Way Handshake verso %s:%d...\n", ip, port);
 
     // 3. Connessione attiva (Connect)

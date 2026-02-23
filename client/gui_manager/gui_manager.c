@@ -14,6 +14,9 @@ static GtkWidget *password_entry;
 static GtkWidget *status_enroll;
 static GtkWidget *status_key;
 static GtkWidget *status_connect;
+static GtkWidget *status_intro;
+static GtkWidget *ip_entry;
+static GtkWidget *server_toggle;
 
 // --- PROTOTIPI DELLE FUNZIONI DI PAGINA (Per evitare warning di dichiarazione) ---
 GtkWidget* create_intro_page();
@@ -39,7 +42,7 @@ void add_vault_row_callback(const char *service, const char *password) {
     gtk_list_box_append(GTK_LIST_BOX(vault_list), row);
 }
 
-// Callback per il bottone di refresh, svuota la lista e chiama la funzione di fetch passando la callback che aggiunge le righe alla lista
+// ---4. Callback per il bottone di refresh, svuota la lista e chiama la funzione di fetch passando la callback che aggiunge le righe alla lista
 static void on_refresh_clicked(GtkWidget *widget, gpointer data) {
     (void)widget; (void)data;
     GtkWidget *child;
@@ -50,7 +53,7 @@ static void on_refresh_clicked(GtkWidget *widget, gpointer data) {
     client_service_fetch_vault(add_vault_row_callback);
 }
 
-// Callback per il bottone di salvataggio della nuova password, prende i dati dai campi di testo, chiama la funzione di store e aggiorna la lista
+// --- 4. Callback per il bottone di salvataggio della nuova password, prende i dati dai campi di testo, chiama la funzione di store e aggiorna la lista
 static void on_actual_save(GtkButton *btn, gpointer data) {
     GtkWidget *dialog = GTK_WIDGET(data);
     GtkWidget *ent_svc = GTK_WIDGET(g_object_get_data(G_OBJECT(btn), "svc"));
@@ -67,7 +70,7 @@ static void on_actual_save(GtkButton *btn, gpointer data) {
     }
 }
 
-// Callback per il bottone di aggiunta di una nuova password, apre un dialog con i campi per inserire servizio e password, e un bottone di conferma che chiama la callback di salvataggio
+// --- 4. Callback per il bottone di aggiunta di una nuova password, apre un dialog con i campi per inserire servizio e password, e un bottone di conferma che chiama la callback di salvataggio
 static void on_add_password_clicked(GtkWidget *widget, gpointer data) {
     (void)data;
     GtkWidget *dialog = gtk_window_new();
@@ -158,7 +161,7 @@ static void on_usb_file_opened(GObject *source, GAsyncResult *res, gpointer data
     }
 }
 
-//--- 2. Callback per il bottone di caricamento della chiave da USB. ---
+// --- 2. Callback per il bottone di caricamento della chiave da USB. ---
 static void on_usb_load_clicked(GtkWidget *widget, gpointer data) {
     (void)data;
     // Apre un file dialog per scegliere il file della chiave USB. 
@@ -167,7 +170,51 @@ static void on_usb_load_clicked(GtkWidget *widget, gpointer data) {
     gtk_file_dialog_open(dialog, GTK_WINDOW(gtk_widget_get_root(widget)), NULL, on_usb_file_opened, NULL);
 }
 
+// --- 2. Callback per il salvataggio della nuova chiave generata
+static void on_usb_generate_save_response(GObject *source, GAsyncResult *res, gpointer data) {
+    (void)data;
+    GtkFileDialog *dialog = GTK_FILE_DIALOG(source);
+    GFile *file = gtk_file_dialog_save_finish(dialog, res, NULL);
+
+    if (file) {
+        char *path = g_file_get_path(file);
+        
+        // Chiamata alla funzione del service per generare 32 byte di entropia
+        if (crypto_generate_usb_key(path) == 0) {
+            // Una volta generata, la carichiamo subito come chiave di sessione
+            unsigned char loaded_key[32];
+            crypto_load_usb_key(path, loaded_key);
+            client_service_set_session_key(loaded_key);
+            
+            g_print("[+] Nuova chiave generata in: %s\n", path);
+            on_key_ready(); // Prosegui verso la connessione
+        } else {
+            // Gestione errore (es. permessi negati sulla USB)
+            g_warning("[-] Impossibile generare la chiave in %s", path);
+        }
+        
+        g_free(path);
+        g_object_unref(file);
+    }
+}
+
+// --- 2.Handler per il click sul bottone "Genera"
+void on_usb_generate_clicked(GtkWidget *widget, gpointer data) {
+    (void)data;
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, "Scegli dove salvare la nuova chiave");
+    gtk_file_dialog_set_initial_name(dialog, "vault.key");
+
+    // Apre il dialog in modalità "salva"
+    gtk_file_dialog_save(dialog, GTK_WINDOW(gtk_widget_get_root(widget)), 
+                         NULL, on_usb_generate_save_response, NULL);
+}
+
+
+
 // --- 1. LOGICA ENROLLMENT (STEP 1) ---
+GtkWidget* gui_get_status_intro() { return status_intro; }
+
 static void on_enroll_submit(GtkWidget *widget, gpointer data) {
     (void)widget; (void)data;
      //Prende il testo inserito dall'utente nel campo OTP
@@ -181,16 +228,75 @@ static void on_enroll_submit(GtkWidget *widget, gpointer data) {
 }
 
 // --- 0. LOGICA INIZIALE  ---
-static void on_start_clicked(GtkWidget *widget, gpointer data) {
+// In gui_handlers.c
+void on_start_clicked(GtkWidget *widget, gpointer data) {
     (void)widget; (void)data;
+    GtkWidget *status_lbl = gui_get_status_intro();
 
-    // Controlla se è necessario l'enrollment (prima fase obbligatoria per ogni nuovo dispositivo)
-    if (client_service_needs_enrollment()) {    // Se è necessario, richiedi l'enrollment e mostra la pagina di enrollment
-        client_service_request_enrollment(get_system_user());
-        gtk_stack_set_visible_child_name(GTK_STACK(stack), "enroll_page");
-    } else {    // Se non è necessario, salta direttamente alla fase 2 (scelta chiave)
-        gtk_stack_set_visible_child_name(GTK_STACK(stack), "key_page");
+    if (client_service_needs_enrollment()) {
+        // Chiamata al service: tenta di contattare il server via TLS basico
+        if (client_service_request_enrollment(get_system_user()) == 0) {
+            // Successo: il server ha risposto "OK"
+            gtk_label_set_text(GTK_LABEL(status_lbl), ""); // Pulisce eventuali errori precedenti
+            gtk_stack_set_visible_child_name(GTK_STACK(stack), "enroll_page"); 
+        } else {
+            // Fallimento: connessione fallita o risposta negativa
+            gtk_label_set_text(GTK_LABEL(status_lbl), "⚠️ Il server non accetta connessioni. Verifica che sia attivo.");
+        }
+    } else {
+        // Enrollment non necessario (certificati già presenti)
+        gtk_stack_set_visible_child_name(GTK_STACK(stack), "key_page"); 
     }
+}
+
+// Callback per il salvataggio della configurazione server
+static void on_server_config_done(GtkWidget *widget, gpointer data) {
+    (void)widget; (void)data;
+    
+    const char *final_ip;
+    // Se lo switch è attivo (ON), usiamo l'IP manuale, altrimenti localhost
+    if (gtk_switch_get_active(GTK_SWITCH(server_toggle))) {
+        final_ip = gtk_editable_get_text(GTK_EDITABLE(ip_entry));
+    } else {
+        final_ip = "127.0.0.1";
+    }
+    printf("[*] Server IP configurato: %s\n", final_ip);
+    client_service_set_server_config(final_ip); //Setta nel service --> context
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), "intro_page");
+}
+
+// Gestione dell'abilitazione del campo IP in base allo switch
+static void on_server_toggle_changed(GtkSwitch *sw, gpointer data) {
+    (void)data;
+    gtk_widget_set_sensitive(ip_entry, gtk_switch_get_active(sw));
+}
+
+// Creazione della nuova pagina di configurazione
+GtkWidget* create_server_config_page() {
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 20);
+    gtk_widget_set_halign(box, GTK_ALIGN_CENTER);
+    gtk_widget_set_valign(box, GTK_ALIGN_CENTER);
+
+    gtk_box_append(GTK_BOX(box), gtk_label_new("Configurazione Server di Rete"));
+
+    GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_box_append(GTK_BOX(row), gtk_label_new("Usa IP personalizzato (non localhost)"));
+    server_toggle = gtk_switch_new();
+    g_signal_connect(server_toggle, "state-set", G_CALLBACK(on_server_toggle_changed), NULL);
+    gtk_box_append(GTK_BOX(row), server_toggle);
+    gtk_box_append(GTK_BOX(box), row);
+
+    ip_entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(ip_entry), "Es: 192.168.1.50");
+    gtk_widget_set_sensitive(ip_entry, FALSE); // Disabilitato di default (localhost)
+    gtk_box_append(GTK_BOX(box), ip_entry);
+
+    GtkWidget *btn = gtk_button_new_with_label("Conferma e Prosegui");
+    gtk_widget_add_css_class(btn, "suggested-action");
+    g_signal_connect(btn, "clicked", G_CALLBACK(on_server_config_done), NULL);
+    gtk_box_append(GTK_BOX(box), btn);
+
+    return box;
 }
 
 
@@ -238,8 +344,12 @@ GtkWidget* create_intro_page() {
     
     gtk_widget_add_css_class(btn, "suggested-action");
     g_signal_connect(btn, "clicked", G_CALLBACK(on_start_clicked), NULL);
-    
     gtk_box_append(GTK_BOX(box), btn);
+
+    status_intro = gtk_label_new("");
+    gtk_widget_add_css_class(status_intro, "error-text"); // Classe CSS per il colore rosso
+    gtk_widget_set_margin_top(status_intro, 10);
+    gtk_box_append(GTK_BOX(box), status_intro);
 
     return box;
 }
@@ -269,28 +379,44 @@ GtkWidget* create_enrollment_page() {
     return box;
 }
 
-// Creazione della pagina per la scelta della Chiave Privata 
+// Creazione della pagina di scelta chiave, con opzioni per sbloccare con password o con chiave USB, e un messaggio di stato
+// con possibilità anche di generare una nuova chiave USB (per chi non ha già una chiave pronta) 
 GtkWidget* create_key_select_page() {
-    // Creazione di un box verticale per organizzare gli elementi della pagina
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 15);
-    gtk_widget_set_halign(box, GTK_ALIGN_CENTER); gtk_widget_set_valign(box, GTK_ALIGN_CENTER);
-    gtk_box_append(GTK_BOX(box), gtk_label_new("Passo 2: Scegli Key Encryption-Decryption")); //Aggiunta di una Label per il titolo della pagina
+    gtk_widget_set_halign(box, GTK_ALIGN_CENTER); 
+    gtk_widget_set_valign(box, GTK_ALIGN_CENTER);
     
-    //Blocco per l'inserimento di una Master Key derivata da password
+    GtkWidget *title = gtk_label_new(NULL);
+    gtk_label_set_markup(GTK_LABEL(title), "<span size='large' weight='bold'>Passo 2: Configurazione Chiave</span>");
+    gtk_box_append(GTK_BOX(box), title);
+
+    // --- SEZIONE SBLOCCO (Password) ---
     password_entry = gtk_entry_new();
     gtk_entry_set_visibility(GTK_ENTRY(password_entry), FALSE);
     gtk_entry_set_placeholder_text(GTK_ENTRY(password_entry), "Master Password");
     gtk_box_append(GTK_BOX(box), password_entry);
+    
     GtkWidget *btn_pw = gtk_button_new_with_label("Sblocca con Password");
     g_signal_connect(btn_pw, "clicked", G_CALLBACK(on_password_unlock_clicked), NULL);
     gtk_box_append(GTK_BOX(box), btn_pw);
 
-    //Blocco per il caricamento di una Master Key da file USB
-    GtkWidget *btn_usb = gtk_button_new_with_label("Sblocca con USB");
-    g_signal_connect(btn_usb, "clicked", G_CALLBACK(on_usb_load_clicked), NULL);
-    gtk_box_append(GTK_BOX(box), btn_usb);
-    status_key = gtk_label_new("Carica la tua chiave privata locale");
+    // --- SEZIONE USB (Caricamento e Generazione) ---
+    GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
+    gtk_box_append(GTK_BOX(box), sep);
+
+    GtkWidget *btn_usb_load = gtk_button_new_with_label("Sblocca con USB esistente");
+    g_signal_connect(btn_usb_load, "clicked", G_CALLBACK(on_usb_load_clicked), NULL);
+    gtk_box_append(GTK_BOX(box), btn_usb_load);
+
+    // NUOVO: Bottone per generare una nuova chiave
+    GtkWidget *btn_usb_gen = gtk_button_new_with_label("Genera Nuova Chiave su USB");
+    gtk_widget_add_css_class(btn_usb_gen, "outline"); // Uno stile diverso per distinguerlo
+    g_signal_connect(btn_usb_gen, "clicked", G_CALLBACK(on_usb_generate_clicked), NULL);
+    gtk_box_append(GTK_BOX(box), btn_usb_gen);
+
+    status_key = gtk_label_new("Seleziona un metodo di sblocco o crea una chiave");
     gtk_box_append(GTK_BOX(box), status_key);
+    
     return box;
 }
 
@@ -359,6 +485,7 @@ void setup_main_window(GtkApplication *app) {
     //Ogni finestra può avere un solo figlio diretto, dunque diciamo alla finestra che il suo figlio è lo stack (che a sua volta conterrà tutte le pagine)
 
     //Registrazione delle pagine allo stack, con un nome identificativo per ognuna (usato per navigare tra le pagine)
+    gtk_stack_add_named(GTK_STACK(stack), create_server_config_page(), "server_page");
     gtk_stack_add_named(GTK_STACK(stack), create_intro_page(), "intro_page");
     gtk_stack_add_named(GTK_STACK(stack), create_enrollment_page(), "enroll_page");
     gtk_stack_add_named(GTK_STACK(stack), create_key_select_page(), "key_page");
@@ -366,6 +493,6 @@ void setup_main_window(GtkApplication *app) {
     gtk_stack_add_named(GTK_STACK(stack), create_vault_page(), "vault_page");
 
     //All'avvio mostriamo la pagina intro_page
-    gtk_stack_set_visible_child_name(GTK_STACK(stack), "intro_page");
+    gtk_stack_set_visible_child_name(GTK_STACK(stack), "server_page"); //Iniziamo dalla configurazione server, è importante che l'utente configuri l'IP prima di qualsiasi altra cosa
     gtk_window_present(GTK_WINDOW(window)); //Dice al sistema operativo di rendere visibile la finestra (e dunque tutta l'interfaccia)
 }
