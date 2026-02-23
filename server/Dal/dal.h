@@ -3,6 +3,9 @@
 
 #include <stdio.h>
 
+#define PENDING_FILE  "pending_requests.dat"
+#define USER_REGISTRY "users.dat"
+#define VAULTS_DIR    "vaults/"
 /* ========================================================================= *
  * GESTIONE IDENTITÀ (users.dat)                                             *
  * ========================================================================= */
@@ -30,7 +33,7 @@ int dal_save_record(const char *fp, const char *service, const char *encrypted_b
 char* dal_fetch_all_records(const char *fp);
 
 /* ========================================================================= *
- * GESTIONE OTP (pending_requests.dat)                                       *
+ *                  GESTIONE OTP (pending_requests.dat)                      *
  * ========================================================================= */
 
 // Salva una richiesta di enrollment in attesa di approvazione

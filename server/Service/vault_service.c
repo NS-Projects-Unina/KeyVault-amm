@@ -3,41 +3,40 @@
 #include "network.h"
 #include "pki.h"
 #include "dal.h"
+#include "system_context.h"
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
 #include <openssl/x509.h>
 #include <openssl/pem.h>
 
-/*
- * Stato globale del SERVER (condiviso, ma solo in lettura dopo l'init).
- * Non contiene più alcun riferimento al client corrente: ogni thread
- * gestisce il proprio SSL* in modo completamente indipendente.
- */
-static SSL_CTX *server_ctx = NULL;
-static int      listen_fd  = -1;
 
 
 /* ========================================================================= *
- * CICLO DI VITA DEL SISTEMA                                                 *
+ *                  CICLO DI VITA DEL SISTEMA                                *
  * ========================================================================= */
 
 int vault_service_init_system() {
     setup_server_infrastructure();
     init_openssl();
 
-    server_ctx = create_server_ctx("certs/server.crt", "certs/server.key", "certs/ca.crt");
-    if (!server_ctx) return -1;
+    // Creiamo le risorse temporaneamente
+    SSL_CTX *ctx = create_server_ctx("certs/server.crt", "certs/server.key", "certs/ca.crt");
+    int fd = create_tcp_socket();
+    
+    if (bind_socket(fd, 8080) < 0) return -1;
+    listen_socket(fd, 128);
 
-    listen_fd = create_tcp_socket();
-    if (bind_socket(listen_fd, 8080) < 0) return -1;
-    listen_socket(listen_fd, 128); // backlog aumentato per gestire più connessioni simultanee
+    // Salviamo tutto nel layer Context
+    sys_ctx_set(ctx, fd); 
+    
     return 0;
 }
 
 void vault_service_shutdown() {
-    if (server_ctx) { SSL_CTX_free(server_ctx); server_ctx = NULL; }
-    if (listen_fd != -1) { close_socket(listen_fd); listen_fd = -1; }
+    SystemContext *ctx = sys_ctx_get();
+    if (ctx->server_ctx) { SSL_CTX_free(ctx->server_ctx); ctx->server_ctx = NULL; }
+    if (ctx->listen_fd != -1) { close_socket(ctx->listen_fd); ctx->listen_fd = -1; }
     cleanup_openssl();
 }
 
@@ -58,13 +57,13 @@ int vault_service_accept_client(char *out_fp, size_t fp_len,
     // **out_ssl serve per restituire al chiamante l'oggetto SSL* creato per questa connessione.
     // con *out_ssl si accede al contenuto del puntatore.
     *out_ssl = NULL; //Inizialmente nullo.
-
+    SystemContext *sys = sys_ctx_get();
     
-    int client_fd = accept_client(listen_fd); //Chiamata bloccante.
+    int client_fd = accept_client(sys->listen_fd); //Chiamata bloccante.
     if (client_fd < 0) return -1;
 
     // Elevazione a TLS
-    SSL *ssl = accept_tls_connection(server_ctx, client_fd); 
+    SSL *ssl = accept_tls_connection(sys->server_ctx, client_fd); 
     // ssl -> oggetto TLS in memoria
     if (!ssl) {
         close_socket(client_fd);

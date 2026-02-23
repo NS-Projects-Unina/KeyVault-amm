@@ -6,25 +6,23 @@
 #include <pthread.h>
 
 /* ========================================================================= *
- * STRUTTURA DATI PASSATA AD OGNI THREAD                                     *
- * ========================================================================= */
-
-/*
+ *              STRUTTURA DATI PASSATA AD OGNI THREAD                        *
+ * ========================================================================= *
  * Raggruppa tutto il contesto di una singola connessione.
  * Viene allocata sull'heap prima della creazione del thread e liberata
  * dal thread stesso al termine, così il main loop non deve aspettare.
- */
+*/
 
 typedef struct {
-    SSL  *ssl;
-    int   auth_status;
-    char  fingerprint[65];
-    char  username[256];
+    SSL  *ssl; // Puntatore all'oggetto SSL specifico per quel Client
+    int   auth_status; // -1 = errore, 0 = sessione anonima (enrollment), 1 = sessione autenticata (mTLS)
+    char  fingerprint[65]; // Impronta del certificato client (se autenticato)
+    char  username[256]; // Nome utente associato al certificato (se autenticato) o alla richiesta di enrollment
 } ClientContext;
 
 
 /* ========================================================================= *
- * HELPER I/O (ora thread-safe: usano il proprio ssl)                        *
+ *          HELPER I/O (ora thread-safe: usano il proprio ssl)               *
  * ========================================================================= */
 
 static void send_response(SSL *ssl, const char *status, const char *message) {
@@ -32,7 +30,6 @@ static void send_response(SSL *ssl, const char *status, const char *message) {
     snprintf(final_resp, sizeof(final_resp), "%s|%s", status, message);
     vault_service_send_data(ssl, final_resp);
 }
-
 
 /* ========================================================================= *
  * GESTIONE SESSIONE ANONIMA (Solo per Registrazione)                        *

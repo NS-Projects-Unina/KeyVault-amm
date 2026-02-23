@@ -5,10 +5,10 @@
 #include <time.h>
 #include <sys/stat.h> // Per mkdir
 #include <unistd.h>
+#include <pthread.h>    
 
-#define PENDING_FILE  "pending_requests.dat"
-#define USER_REGISTRY "users.dat"
-#define VAULTS_DIR    "vaults/"
+// Inizializziamo un Mutex statico (privato del DAL)
+static pthread_mutex_t dal_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /* --- HELPER: Genera il percorso del file vault dall'hash --- */
 static void get_vault_path(const char *fp, char *out_path, size_t size) {
@@ -45,29 +45,31 @@ int dal_fingerprint_exists(const char *fp) { return check_user_registry(fp, 0); 
 int dal_username_taken(const char *user)   { return check_user_registry(user, 1); }
 
 int dal_register_user(const char *fp, const char *user) {
-    // 1. Assicuriamoci che la cartella vaults esista
-    mkdir(VAULTS_DIR, 0700);
+    pthread_mutex_lock(&dal_mutex); // --- LOCK ---
 
-    // 2. Registrazione in users.dat
+    mkdir(VAULTS_DIR, 0700);
     FILE *f = fopen(USER_REGISTRY, "a");
-    if (!f) return -1;
+    if (!f) {
+        pthread_mutex_unlock(&dal_mutex);
+        return -1;
+    }
     fprintf(f, "%s|%s\n", fp, user);
     fclose(f);
 
-    // 3. Creazione file vault individuale vuoto
     char path[512];
     get_vault_path(fp, path, sizeof(path));
     FILE *v = fopen(path, "wb");
     if (v) fclose(v);
 
-    printf("[*] DAL: Utente '%s' registrato e vault creato.\n", user);
+    pthread_mutex_unlock(&dal_mutex); // --- UNLOCK ---
+
     return 0;
 }
 
 /* ========================================================================= *
  * 2. GESTIONE VAULT INDIVIDUALE (vaults/[fp].dat)                           *
  * ========================================================================= */
-
+//Qui non serve mutex perché ogni thread accede solo al file del proprio utente (identificato dal fingerprint), quindi non ci sono race condition
 // SALVA: Scrive nel file specifico dell'utente
 int dal_save_record(const char *fp, const char *service, const char *encrypted_blob) {
     char path[512];
@@ -112,17 +114,37 @@ char* dal_fetch_all_records(const char *fp) {
  * ========================================================================= */
 
 int dal_save_pending_request(const char *user, const char *otp) {
-    if (dal_username_taken(user)) return -1;
+    pthread_mutex_lock(&dal_mutex); // --- BLOCCA TUTTO ---
+
+    // 1. Controllo se l'utente è già nel registro (users.dat)
+    if (check_user_registry(user, 1)) { 
+        pthread_mutex_unlock(&dal_mutex);
+        return -1; 
+    }
+
+    // 2. Scrittura della richiesta pendente
     FILE *f = fopen(PENDING_FILE, "a");
-    if (!f) return -1;
+    if (!f) {
+        pthread_mutex_unlock(&dal_mutex);
+        return -1;
+    }
+    
     fprintf(f, "USER: %s | OTP: %s | DATA: %ld\n", user, otp, (long)time(NULL));
     fclose(f);
+
+    pthread_mutex_unlock(&dal_mutex); // --- SBLOCCA ---
     return 0;
 }
 
 int dal_verify_and_burn_otp(const char *user, const char *provided_otp) {
+    pthread_mutex_lock(&dal_mutex); // EVITA che due thread rinominino lo stesso file tmp!
+
     FILE *f = fopen(PENDING_FILE, "r");
-    if (!f) return -1;
+    if (!f) {
+        pthread_mutex_unlock(&dal_mutex);
+        return -1;
+    }
+    
     FILE *tmp = fopen("pending_requests.tmp", "w");
     char line[512];
     int found = 0;
@@ -139,5 +161,7 @@ int dal_verify_and_burn_otp(const char *user, const char *provided_otp) {
     fclose(f);
     fclose(tmp);
     rename("pending_requests.tmp", PENDING_FILE);
+
+    pthread_mutex_unlock(&dal_mutex);
     return (found) ? 0 : -1;
 }
