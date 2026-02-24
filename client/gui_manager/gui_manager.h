@@ -3,6 +3,9 @@
 
 #include <gtk/gtk.h>
 
+
+void setup_main_window(GtkApplication *app);
+
 // Funzioni di creazione pagine
 GtkWidget* create_intro_page(void);
 GtkWidget* create_enrollment_page(void);

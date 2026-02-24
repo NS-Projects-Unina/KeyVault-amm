@@ -11,6 +11,7 @@ const char* get_system_user();
 int load_file_to_buffer(const char *path, char *buffer, size_t size);
 int save_buffer_to_file(const char *path, const char *buffer);
 
+int client_service_has_ca(void);
 
 void ensure_certs_dir();
 #endif

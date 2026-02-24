@@ -3,26 +3,23 @@
 
 #include <stddef.h>
 
-// Funzioni di Configurazione (Ponte verso il Context)
+// Configurazione base
 void client_service_set_server_config(const char *ip);
 void client_service_set_default_username();
-void client_service_set_username(const char *username); // Aggiunta per la GUI
 const char* client_service_get_username();
-
-// Funzioni di Sessione e Vault
-int client_service_init_session(void);
-void client_service_set_session_key(const unsigned char *key);
-int client_service_store_data_encrypted(const char *svc, const char *pass, char *out_resp, size_t len);
-void client_service_fetch_vault(void (*data_handler)(const char *svc, const char *pass));
-void client_service_close_session(void);
-
-// Sblocco Sessione (Logica Crittografica)
-int client_service_unlock_with_password(const char *password);
-int client_service_unlock_with_usb(const char *path);
-
-
-int client_service_has_ca(void);
 int client_service_import_ca(const char *source_path);
 
+// Gestione chiavi
+int client_service_unlock_with_password(const char *password);
+int client_service_unlock_with_usb(const char *path);
+int client_service_generate_new_usb_key(const char *path);
+
+// Sessione mTLS
+int client_service_init_session(void);
+void client_service_close_session(void);
+
+// Vault: Protocollo e Parsing
+int client_service_store_data(const char *svc, const char *pass, char *out_server_resp, size_t resp_len);
+void client_service_fetch_and_parse_vault(void (*data_handler)(const char *svc, const char *pass));
 
 #endif // CLIENT_SERVICE_H

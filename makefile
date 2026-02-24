@@ -14,6 +14,7 @@ CFLAGS = -Wall -Wextra -g \
          -I./server/Dal \
          -I./server/Context \
          -I./client \
+         -I./client/controller  \
          -I./client/context \
          -I./client/gui_manager \
          -I./client/service \
@@ -39,6 +40,7 @@ server_app: server/server_main.c \
 
 # --- COMPILAZIONE DEL CLIENT (GUI) ---
 client_app: client/client_main.c \
+            client/controller/client_controller.c \
             client/context/client_context.c \
             client/gui_manager/gui_manager.c \
             client/service/client_utils.c \

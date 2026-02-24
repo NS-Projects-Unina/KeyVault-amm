@@ -1,10 +1,11 @@
+#include "gui_manager.h"
+#include "client_controller.h"
 #include <gtk/gtk.h>
-#include "gui_manager/gui_manager.h"
 
 //Appena riceve il segnale, delega tutto a setup_main_window, che si occupa di costruire l'interfaccia grafica
 static void on_activate(GtkApplication *app, gpointer user_data) {
     (void)user_data; // Questo toglie il warning "unused parameter"
-    client_service_set_default_username(); // Imposta l'username di default nel Context, passando per il service
+    controller_set_default_username();
     setup_main_window(app); 
 }
 
