@@ -2,7 +2,6 @@
 #include "client_utils.h"
 #include "client_context.h" 
 #include "ssl_client.h"
-#include "pki.h"
 #include "network.h"
 
 #include <stdio.h>

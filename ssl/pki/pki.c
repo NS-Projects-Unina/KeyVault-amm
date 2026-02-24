@@ -51,27 +51,6 @@ void setup_server_infrastructure() {
     printf("[+] Infrastruttura Server completata con successo in: %s\n", SERVER_CERTS_PATH);
 }
 
-int pki_generate_csr(const char *username) {
-    char command[512];
-    
-    // Il client deve assicurarsi che la sua cartella esista
-    mkdir("client_storage", 0700);
-    mkdir(CLIENT_CERTS_PATH, 0700);
-
-    // 1. Genera la chiave privata nella cartella del client
-    snprintf(command, sizeof(command), 
-             "openssl genrsa -out " CLIENT_CERTS_PATH "%s.key 2048 2>/dev/null", 
-             username);
-    system(command);
-
-    // 2. Genera la CSR nella cartella del client
-    snprintf(command, sizeof(command), 
-             "openssl req -new -key " CLIENT_CERTS_PATH "%s.key -out " CLIENT_CERTS_PATH "%s.csr -subj '/CN=%s' 2>/dev/null", 
-             username, username, username);
-
-    return system(command);
-}
-
 
 int pki_sign_client_request(const char *identifier) {
     char command[1024];

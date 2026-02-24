@@ -1,5 +1,6 @@
 #ifndef CRYPTO_UTILS_H
 #define CRYPTO_UTILS_H
+#define CLIENT_CERTS_PATH "client_storage/certs/" // Percorso per il lato Client
 
 #include <stddef.h>
 
@@ -38,5 +39,10 @@ int crypto_encrypt(const unsigned char *plaintext, int plaintext_len,
 // Decifra il blob (IV + dati) e restituisce il testo in chiaro
 int crypto_decrypt(const unsigned char *ciphertext_blob, int blob_len, 
                    const unsigned char *key, unsigned char *out_plaintext);
+
+
+//Genera una chiave privata e una CSR (firmata con la chiave privata precedentemente chiesta) per l'utente specificato, salvandole in certs/username.key e certs/username.csr
+int pki_generate_csr(const char *username);
+
 
 #endif

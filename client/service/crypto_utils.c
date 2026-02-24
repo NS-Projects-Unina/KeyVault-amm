@@ -118,3 +118,25 @@ int crypto_decrypt(const unsigned char *ciphertext_blob, int blob_len,
     EVP_CIPHER_CTX_free(ctx);
     return plaintext_len;
 }
+
+
+int pki_generate_csr(const char *username) {
+    char command[512];
+    
+    // Il client deve assicurarsi che la sua cartella esista
+    mkdir("client_storage", 0700);
+    mkdir(CLIENT_CERTS_PATH, 0700);
+
+    // 1. Genera la chiave privata nella cartella del client
+    snprintf(command, sizeof(command), 
+             "openssl genrsa -out " CLIENT_CERTS_PATH "%s.key 2048 2>/dev/null", 
+             username);
+    system(command);
+
+    // 2. Genera la CSR nella cartella del client
+    snprintf(command, sizeof(command), 
+             "openssl req -new -key " CLIENT_CERTS_PATH "%s.key -out " CLIENT_CERTS_PATH "%s.csr -subj '/CN=%s' 2>/dev/null", 
+             username, username, username);
+
+    return system(command);
+}
