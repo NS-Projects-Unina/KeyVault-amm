@@ -1,12 +1,15 @@
 #include "controller.h"
-#include "vault_service.h"
+#include "service_connection.h"
+#include "service_enrollment.h"
+#include "service_vault.h"
+#include "service_utility.h" // Per generate_random_otp
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
 
 /* ========================================================================= *
- *              STRUTTURA DATI PASSATA AD OGNI THREAD                        *
+ * STRUTTURA DATI PASSATA AD OGNI THREAD                        *
  * ========================================================================= *
  * Raggruppa tutto il contesto di una singola connessione.
  * Viene allocata sull'heap prima della creazione del thread e liberata
@@ -21,13 +24,13 @@ typedef struct {
 } ClientContext;
 
 /* ========================================================================= *
- *          HELPER I/O (ora thread-safe: usano il proprio ssl)               *
+ * HELPER I/O (ora thread-safe: usano il proprio ssl)               *
  * ========================================================================= */
 
 static void send_response(SSL *ssl, const char *status, const char *message) {
     char final_resp[4096];
     snprintf(final_resp, sizeof(final_resp), "%s|%s", status, message);
-    vault_service_send_data(ssl, final_resp);
+    service_send_data(ssl, final_resp);
 }
 
 /* ========================================================================= *
@@ -36,7 +39,7 @@ static void send_response(SSL *ssl, const char *status, const char *message) {
 
 static void handle_enrollment_session(SSL *ssl) {
     char buffer[1024];
-    int bytes = vault_service_read_data(ssl, buffer, sizeof(buffer) - 1);
+    int bytes = service_read_data(ssl, buffer, sizeof(buffer) - 1);
     if (bytes <= 0) return;
     buffer[bytes] = '\0';
 
@@ -46,10 +49,10 @@ static void handle_enrollment_session(SSL *ssl) {
     if (cmd && strcmp(cmd, "REQUEST_ENROLL") == 0) {
         char *user = strtok(NULL, "|");
         if (user) {
-            char otp[9];
-            generate_random_otp(otp, sizeof(otp));
-
-            if (vault_service_request_enrollment(user, otp) == 0) {
+            char otp[9]; // Buffer per l'OTP
+            
+            // Il Service di enrollment gestisce la generazione e il salvataggio
+            if (service_request_enrollment(user, otp) == 0) {
                 printf("\n[!!!] ADMIN: Richiesta da '%s'. OTP generato: %s\n", user, otp);
                 send_response(ssl, "OK", "Richiesta registrata. Chiedi l'OTP all'admin.");
             } else {
@@ -64,7 +67,7 @@ static void handle_enrollment_session(SSL *ssl) {
         char *csr  = strtok(NULL, "");
 
         if (user && otp && csr) {
-            if (vault_service_process_enrollment(ssl, user, otp, csr) != 0) {
+            if (service_process_enrollment(ssl, user, otp, csr) != 0) {
                 printf("[-] Enrollment fallito per l'utente %s.\n", user);
             }
         }
@@ -90,7 +93,7 @@ static void handle_authenticated_session(SSL *ssl,
 
     while (1) {
         memset(buffer, 0, sizeof(buffer));
-        int bytes = vault_service_read_data(ssl, buffer, sizeof(buffer) - 1);
+        int bytes = service_read_data(ssl, buffer, sizeof(buffer) - 1);
         if (bytes <= 0) break;
 
         buffer[bytes] = '\0';
@@ -104,17 +107,17 @@ static void handle_authenticated_session(SSL *ssl,
             char *payload  = strtok(NULL, "|");
 
             if (svc_name && payload) {
-                if (vault_service_save_credential(fingerprint, svc_name, payload) == 0)
+                if (service_save_credential(fingerprint, svc_name, payload) == 0)
                     send_response(ssl, "OK", "Credenziale salvata nel vault univoco");
                 else
                     send_response(ssl, "ERROR", "Errore di persistenza dati");
             }
         }
         else if (strcmp(cmd, "GET_ALL") == 0) {
-            char *data = vault_service_get_all(fingerprint);
+            char *data = service_get_all(fingerprint);
 
             if (data && data[0] != '\0') {
-                vault_service_send_data(ssl, data);
+                service_send_data(ssl, data);
                 free(data);
             } else {
                 send_response(ssl, "INFO", "Il tuo vault è vuoto");
@@ -149,21 +152,21 @@ static void *client_thread(void *arg) {
         handle_enrollment_session(ctx->ssl);
     }
 
-    vault_service_close_client(ctx->ssl);
+    service_close_client(ctx->ssl);
     free(ctx);
     return NULL;
 }
 
 
 /* ========================================================================= *
- *                      LOOP PRINCIPALE DEL SERVER                           *
+ * LOOP PRINCIPALE DEL SERVER                           *
  * ========================================================================= */
 
 int run_server_controller() {
     printf("[*] Inizializzazione moduli di sistema...\n");
 
     // Inizializza PKI e socket di ascolto.
-    if (vault_service_init_system() != 0) {
+    if (service_init_system() != 0) {
         fprintf(stderr, "[-] Errore: Impossibile avviare il Service.\n");
         return -1;
     }
@@ -182,7 +185,7 @@ int run_server_controller() {
         }
 
         // Chiamata bloccante: il Main loop attende che arrivi qualcuno
-        ctx->auth_status = vault_service_accept_client(
+        ctx->auth_status = service_accept_client(
             ctx->fingerprint, sizeof(ctx->fingerprint),
             ctx->username,    sizeof(ctx->username),
             &ctx->ssl
@@ -190,7 +193,7 @@ int run_server_controller() {
         // ctx è l'indirizzo della struttura nell'heap.
         // ctx -> ssl è il contenuto del campo SSL.
         // & ctx-> ssl è l'indirizzo dove risiede il campo SSL all'interno della struttura.
-        // In questo modo la funzione vault_service_accept_client può scrivere l'indirizzo della struttura SSL* creata per il client direttamente dentro ctx->ssl, così che il thread possa usarla per comunicare con quel client specifico.
+        // In questo modo la funzione service_accept_client può scrivere l'indirizzo della struttura SSL* creata per il client direttamente dentro ctx->ssl, così che il thread possa usarla per comunicare con quel client specifico.
 
         if (ctx->auth_status < 0) {
             /* Errore di rete/TLS: scartiamo questo client e riproviamo. */
@@ -203,11 +206,11 @@ int run_server_controller() {
         pthread_t tid;
         if (pthread_create(&tid, NULL, client_thread, ctx) != 0) {
             perror("[-] pthread_create");
-            vault_service_close_client(ctx->ssl);
+            service_close_client(ctx->ssl);
             free(ctx);
         }
     }
 
-    vault_service_shutdown();
+    service_shutdown();
     return 0;
 }

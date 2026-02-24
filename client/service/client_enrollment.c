@@ -56,7 +56,7 @@ int client_service_request_enrollment(const char *user) {
 
 int client_enrollment_generate_csr(const char *user) {
     ensure_certs_dir();
-    return pki_generate_csr(user);
+    return generate_pkey_csr(user);
 }
 
 int client_enrollment_send_and_save_cert(const char *user, const char *otp) {

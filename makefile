@@ -4,7 +4,7 @@ CC = gcc
 GTK_CFLAGS := $(shell pkg-config --cflags gtk4)
 GTK_LIBS   := $(shell pkg-config --libs gtk4)
 
-# CFLAGS: Aggiunto il path per il nuovo layer Context del server
+# CFLAGS: Include paths per tutti i moduli del progetto
 CFLAGS = -Wall -Wextra -g \
          -I./network \
          -I./ssl \
@@ -14,31 +14,35 @@ CFLAGS = -Wall -Wextra -g \
          -I./server/Dal \
          -I./server/Context \
          -I./client \
-         -I./client/controller  \
+         -I./client/controller \
          -I./client/context \
          -I./client/gui_manager \
          -I./client/service \
          $(GTK_CFLAGS)
 
-# LDFLAGS: Fondamentale aggiungere -lpthread per i Mutex e i Thread del Controller
+# LDFLAGS: Librerie di sistema (OpenSSL, Pthread per mutex/thread, e GTK4)
 LDFLAGS = -lssl -lcrypto -lpthread $(GTK_LIBS)
 PORT = 8080
 
 all: server_app client_app
 
 # --- COMPILAZIONE DEL SERVER ---
-# Aggiunto server/Context/system_context.c alla lista dei sorgenti
+# Architettura a servizi disaccoppiati e utility trasversali
 server_app: server/server_main.c \
             network/network.c \
             ssl/ssl.c \
             ssl/pki/pki.c \
             server/Controller/controller.c \
-            server/Service/vault_service.c \
+            server/Service/service_connection.c \
+            server/Service/service_enrollment.c \
+            server/Service/service_vault.c \
+            server/Service/service_utility.c \
             server/Dal/dal.c \
             server/Context/system_context.c
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
 # --- COMPILAZIONE DEL CLIENT (GUI) ---
+# Il client non include più pki.c (Separation of Concerns raggiunta)
 client_app: client/client_main.c \
             client/controller/client_controller.c \
             client/context/client_context.c \
@@ -48,8 +52,7 @@ client_app: client/client_main.c \
             client/service/client_service.c \
             client/service/crypto_utils.c \
             network/network.c \
-            ssl/ssl.c \
-            ssl/pki/pki.c
+            ssl/ssl.c
 	$(CC) $(CFLAGS) $^ -o $@ $(LDFLAGS)
 
 # --- TARGET PER FERMARE IL SERVER ---
@@ -57,10 +60,13 @@ stop:
 	@echo "[*] Liberazione porta $(PORT)..."
 	@fuser -k $(PORT)/tcp 2>/dev/null || echo "[-] Nessun processo attivo sulla porta $(PORT)."
 
+# --- TARGET PER RESETTARE L'AMBIENTE (Nuclear Option) ---
 clean: stop
-	@echo "[*] Pulizia file binari e database..."
+	@echo "[*] Pulizia file binari, storage e database..."
 	rm -f server_app client_app
-	rm -rf certs/
-	rm -f pending_requests.dat users.dat
+	rm -rf server_storage/
+	rm -rf client_storage/
 	rm -rf vaults/
-	@echo "[+] Sistema resettato e porta libera."
+	rm -f pending_requests.dat pending_requests.tmp users.dat
+	rm -f vault.key
+	@echo "[+] Sistema resettato completamente."

@@ -42,7 +42,7 @@ int crypto_decrypt(const unsigned char *ciphertext_blob, int blob_len,
 
 
 //Genera una chiave privata e una CSR (firmata con la chiave privata precedentemente chiesta) per l'utente specificato, salvandole in certs/username.key e certs/username.csr
-int pki_generate_csr(const char *username);
+int generate_pkey_csr(const char *username);
 
 
 #endif

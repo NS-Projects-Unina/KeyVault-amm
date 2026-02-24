@@ -120,7 +120,7 @@ int crypto_decrypt(const unsigned char *ciphertext_blob, int blob_len,
 }
 
 
-int pki_generate_csr(const char *username) {
+int generate_pkey_csr(const char *username) {
     char command[512];
     
     // Il client deve assicurarsi che la sua cartella esista
