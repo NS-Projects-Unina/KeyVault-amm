@@ -43,7 +43,6 @@ int client_service_generate_new_usb_key(const char *path) {
 }
 
 int client_service_init_session() {
-    client_service_close_session();
     
     const char *username = client_context_get_username();
     char cert_path[256], key_path[256], ca_path[256];

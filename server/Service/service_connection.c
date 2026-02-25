@@ -10,6 +10,7 @@
 
 int service_init_system() {
     setup_server_infrastructure();
+    
     init_openssl();
 
     SSL_CTX *ctx = create_server_ctx("server_storage/certs/server.crt", 

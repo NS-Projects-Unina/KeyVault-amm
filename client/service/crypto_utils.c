@@ -45,7 +45,7 @@ int crypto_load_usb_key(const char *path, unsigned char *out_key) {
 
 int crypto_derive_from_password(const char *password, unsigned char *out_key) {
     // Salt statico per la tesina (in produzione andrebbe generato e salvato)
-    const unsigned char salt[] = "KEYVAULT_SALT_2026_AMMODO"; 
+    const unsigned char salt[] = "KEYVAULT_SALT_tepiacesse"; 
     
     // PKCS5_PBKDF2_HMAC: trasforma la password in una chiave robusta
     return PKCS5_PBKDF2_HMAC(password, strlen(password), 
@@ -127,16 +127,24 @@ int generate_pkey_csr(const char *username) {
     mkdir("client_storage", 0700);
     mkdir(CLIENT_CERTS_PATH, 0700);
 
-    // 1. Genera la chiave privata nella cartella del client
+    // 1. Genera la chiave privata RSA con lunghezza 2048 bit
     snprintf(command, sizeof(command), 
              "openssl genrsa -out " CLIENT_CERTS_PATH "%s.key 2048 2>/dev/null", 
              username);
+    //Anche qui ovviamente sono contenuti parametri pubblici, da cui verrà estratta la CSR.
+
     system(command);
 
     // 2. Genera la CSR nella cartella del client
     snprintf(command, sizeof(command), 
              "openssl req -new -key " CLIENT_CERTS_PATH "%s.key -out " CLIENT_CERTS_PATH "%s.csr -subj '/CN=%s' 2>/dev/null", 
              username, username, username);
-
+/*
+    Estrazione della chiave pubblica dalla privata, che verrà inserita
+    nella CSR seguendo la struttura PKCS#10.
+    -subj passa il CN.
+    Firma la CSR con la chiave privata, così che quando il client la riceve
+    allora potrà verificare che il client possiede la key privata corrispondente alla pubblica
+*/
     return system(command);
 }

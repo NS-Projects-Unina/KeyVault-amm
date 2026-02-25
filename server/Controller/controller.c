@@ -2,7 +2,7 @@
 #include "service_connection.h"
 #include "service_enrollment.h"
 #include "service_vault.h"
-#include "service_utility.h" // Per generate_random_otp
+#include "service_utility.h" 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
@@ -60,7 +60,7 @@ static void handle_enrollment_session(SSL *ssl) {
             }
         }
     }
-    // FASE 2: Invio CSR + OTP
+    // FASE 2: Ricezione CSR + OTP
     else if (cmd && strcmp(cmd, "ENROLL") == 0) {
         char *user = strtok(NULL, "|");
         char *otp  = strtok(NULL, "|");

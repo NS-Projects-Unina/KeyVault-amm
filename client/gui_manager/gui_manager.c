@@ -45,7 +45,6 @@ static void on_refresh_clicked(GtkWidget *widget, gpointer data) {
     while ((child = gtk_widget_get_first_child(vault_list)) != NULL) 
         gtk_list_box_remove(GTK_LIST_BOX(vault_list), child);
     
-    // Sostituita la chiamata al service con il controller
     controller_fetch_vault(add_vault_row_callback);
 }
 
