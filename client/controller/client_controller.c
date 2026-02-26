@@ -77,16 +77,22 @@ int controller_perform_enrollment(const char *user, const char *otp) {
 // --- 4. GESTIONE CHIAVI E SBLOCCO SESSIONE ---
 // =========================================================
 
-int controller_unlock_with_password(const char *password) {
-    return client_service_unlock_with_password(password);
+int controller_set_crypto_password() {
+    // Il controller non riceve più la password, ma imposta solo l'intenzione.
+    return client_service_set_crypto_password();
 }
 
-int controller_unlock_with_usb(const char *path) {
-    return client_service_unlock_with_usb(path);
+int controller_set_crypto_usb_path(const char *path) {
+    // Delega al service il salvataggio del percorso del file.
+    // Il service verificherà che il file sia leggibile prima di accettarlo.
+    return client_service_set_crypto_usb_path(path);
 }
 
 int controller_generate_new_usb_key(const char *path) {
     return client_service_generate_new_usb_key(path);
+}
+int controller_is_using_password() {
+    return client_service_is_using_password();
 }
 
 // =========================================================
@@ -100,16 +106,17 @@ int controller_init_session() {
     // Tenta di inizializzare la nuova connessione sicura
     return client_service_init_session(); 
 }
-
-int controller_store_data_encrypted(const char *svc, const char *pass, char *out_server_resp, size_t resp_len) {
+int controller_store_data_encrypted(const char *svc, const char *pass, const char *live_pw, char *out_server_resp, size_t resp_len) {
     // Il controller delega interamente l'operazione. Il service si occuperà 
     // di cifrare, convertire in HEX e impacchettare per il protocollo di rete.
-    return client_service_store_data(svc, pass, out_server_resp, resp_len);
+    return client_service_store_data(svc, pass, live_pw, out_server_resp, resp_len);
+
 }
 
-void controller_fetch_vault(void (*data_handler)(const char *svc, const char *pass)) {
+int controller_fetch_vault(const char *live_pw, void (*data_handler)(const char *svc, const char *pass)) {
     // Il controller non tocca più le stringhe grezze.
     // Passa la callback della GUI direttamente al service.
     // Il service scaricherà, parserà, decifrerà e chiamerà la callback per ogni riga valida.
-    client_service_fetch_and_parse_vault(data_handler);
+   return client_service_fetch_and_parse_vault(live_pw, data_handler);
 }
+

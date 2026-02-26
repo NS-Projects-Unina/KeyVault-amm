@@ -2,26 +2,36 @@
 #define CLIENT_CONTEXT_H
 
 #include <openssl/ssl.h>
-#include "crypto_utils.h"
 
-// --- Configurazione Rete ---
+// Definizione dei metodi di derivazione/lettura della chiave
+typedef enum {
+    CRYPTO_METHOD_NONE = 0,
+    CRYPTO_METHOD_PASSWORD,
+    CRYPTO_METHOD_USB
+} CryptoMethod;
+
+// --- Rete e Configurazione ---
 void client_context_set_server_ip(const char *ip);
 const char* client_context_get_server_ip();
+
+void client_context_set_server_port(int port);
 int client_context_get_server_port();
 
-// --- Identità Utente  ---
-void client_context_set_username(const char *user);
-const char* client_context_get_username();
-
-// --- Stato Sessione ---
+// --- Connessione SSL ---
 void client_context_set_ssl(SSL *ssl);
 SSL* client_context_get_ssl();
+
 void client_context_set_sockfd(int fd);
 int client_context_get_sockfd();
 
-// --- Sicurezza ---
-void client_context_set_session_key(const unsigned char *key);
-unsigned char* client_context_get_session_key();
+// --- Utente ---
+void client_context_set_username(const char *user);
+const char* client_context_get_username();
+
+// --- Gestione Intento Crittografico ---
+void client_context_set_crypto_method(CryptoMethod method, const char *credential);
+CryptoMethod client_context_get_crypto_method();
+const char* client_context_get_crypto_credential();
 int client_context_is_crypto_ready();
 
-#endif
+#endif // CLIENT_CONTEXT_H

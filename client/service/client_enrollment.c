@@ -3,7 +3,7 @@
 #include "client_context.h" 
 #include "ssl_client.h"
 #include "network.h"
-
+#include "crypto_utils.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>

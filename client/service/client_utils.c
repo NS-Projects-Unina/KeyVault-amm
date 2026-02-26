@@ -37,7 +37,3 @@ void ensure_certs_dir() {
         mkdir(CLIENT_CERTS_DIR, 0700);
     }
 }
-int client_service_has_ca() {
-    // Il Service conosce il percorso perché usa le definizioni di pki.h
-    return (access("client_storage/certs/ca.crt", F_OK) == 0);
-}

@@ -10,16 +10,16 @@ const char* client_service_get_username();
 int client_service_import_ca(const char *source_path);
 
 // Gestione chiavi
-int client_service_unlock_with_password(const char *password);
-int client_service_unlock_with_usb(const char *path);
+int client_service_set_crypto_password();
+int client_service_set_crypto_usb_path(const char *path);
 int client_service_generate_new_usb_key(const char *path);
+int client_service_is_using_password();
 
 // Sessione mTLS
 int client_service_init_session(void);
 void client_service_close_session(void);
 
 // Vault: Protocollo e Parsing
-int client_service_store_data(const char *svc, const char *pass, char *out_server_resp, size_t resp_len);
-void client_service_fetch_and_parse_vault(void (*data_handler)(const char *svc, const char *pass));
-
+int client_service_store_data(const char *svc, const char *pass, const char *live_pw, char *out_server_resp, size_t resp_len);
+int client_service_fetch_and_parse_vault(const char *live_pw, void (*data_handler)(const char *svc, const char *pass));
 #endif // CLIENT_SERVICE_H

@@ -7,7 +7,6 @@
 static GtkWidget *stack;
 static GtkWidget *vault_list;
 static GtkWidget *otp_entry;
-static GtkWidget *password_entry;
 static GtkWidget *status_enroll;
 static GtkWidget *status_key;
 static GtkWidget *status_connect;
@@ -39,29 +38,91 @@ void add_vault_row_callback(const char *service, const char *password) {
     gtk_list_box_append(GTK_LIST_BOX(vault_list), row);
 }
 
-static void on_refresh_clicked(GtkWidget *widget, gpointer data) {
-    (void)widget; (void)data;
+// Helper per lanciare la fetch e gestire la GUI in caso di errore
+static void execute_fetch(const char *live_pw) {
     GtkWidget *child;
     while ((child = gtk_widget_get_first_child(vault_list)) != NULL) 
         gtk_list_box_remove(GTK_LIST_BOX(vault_list), child);
     
-    controller_fetch_vault(add_vault_row_callback);
+    int res = controller_fetch_vault(live_pw, add_vault_row_callback);
+    
+    if (res < 0) {
+        GtkWidget *err_dialog = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL, 
+                                GTK_MESSAGE_ERROR, GTK_BUTTONS_OK, 
+                                "Decifratura fallita! Master Password errata o chiave non valida.");
+        g_signal_connect(err_dialog, "response", G_CALLBACK(gtk_window_destroy), NULL);
+        gtk_window_present(GTK_WINDOW(err_dialog));
+    }
+}
+
+// Callback attivata quando l'utente conferma la password dal popup di Sincronizzazione
+static void on_sync_password_submitted(GtkButton *btn, gpointer data) {
+    GtkWidget *dialog = GTK_WIDGET(data);
+    GtkWidget *ent_pw = GTK_WIDGET(g_object_get_data(G_OBJECT(btn), "pw"));
+    
+    const char *live_pw = ent_pw ? gtk_editable_get_text(GTK_EDITABLE(ent_pw)) : NULL;
+    execute_fetch(live_pw);
+    
+    gtk_window_destroy(GTK_WINDOW(dialog));
+}
+
+static void on_refresh_clicked(GtkWidget *widget, gpointer data) {
+    (void)widget; (void)data;
+    
+    if (controller_is_using_password()) {
+        // Se si usa la password, genera un popup per chiederla
+        GtkWidget *dialog = gtk_window_new();
+        gtk_window_set_title(GTK_WINDOW(dialog), "Sblocco Vault");
+        gtk_window_set_modal(GTK_WINDOW(dialog), TRUE);
+        gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(gtk_widget_get_root(widget)));
+        
+        GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+        gtk_widget_set_margin_top(vbox, 15); gtk_widget_set_margin_bottom(vbox, 15);
+        gtk_widget_set_margin_start(vbox, 15); gtk_widget_set_margin_end(vbox, 15);
+        gtk_window_set_child(GTK_WINDOW(dialog), vbox);
+
+        gtk_box_append(GTK_BOX(vbox), gtk_label_new("Inserisci Master Password per decifrare:"));
+
+        GtkWidget *ent_pw = gtk_entry_new();
+        gtk_entry_set_visibility(GTK_ENTRY(ent_pw), FALSE);
+        gtk_box_append(GTK_BOX(vbox), ent_pw);
+
+        GtkWidget *btn_submit = gtk_button_new_with_label("Sincronizza / Decifra");
+        g_object_set_data(G_OBJECT(btn_submit), "pw", ent_pw);
+        g_signal_connect(btn_submit, "clicked", G_CALLBACK(on_sync_password_submitted), dialog);
+        gtk_box_append(GTK_BOX(vbox), btn_submit);
+
+        gtk_window_present(GTK_WINDOW(dialog));
+    } else {
+        // Se si usa USB, l'intento sa già dove andare
+        execute_fetch(NULL);
+    }
 }
 
 static void on_actual_save(GtkButton *btn, gpointer data) {
     GtkWidget *dialog = GTK_WIDGET(data);
     GtkWidget *ent_svc = GTK_WIDGET(g_object_get_data(G_OBJECT(btn), "svc"));
     GtkWidget *ent_pass = GTK_WIDGET(g_object_get_data(G_OBJECT(btn), "pass"));
+    GtkWidget *ent_master = GTK_WIDGET(g_object_get_data(G_OBJECT(btn), "master"));
 
     const char *svc = gtk_editable_get_text(GTK_EDITABLE(ent_svc));
     const char *pass = gtk_editable_get_text(GTK_EDITABLE(ent_pass));
+    const char *live_pw = ent_master ? gtk_editable_get_text(GTK_EDITABLE(ent_master)) : NULL;
 
     if (strlen(svc) > 0 && strlen(pass) > 0) {
         char resp[1024];
-        // Sostituita la chiamata al service con il controller
-        controller_store_data_encrypted(svc, pass, resp, sizeof(resp));
-        gtk_window_destroy(GTK_WINDOW(dialog));
-        on_refresh_clicked(NULL, NULL);
+        int res = controller_store_data_encrypted(svc, pass, live_pw, resp, sizeof(resp));
+        
+        if (res < 0) {
+            GtkWidget *err = gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL, 
+                                GTK_MESSAGE_ERROR, GTK_BUTTONS_OK, "Errore di cifratura (Verifica la Master Password).");
+            g_signal_connect(err, "response", G_CALLBACK(gtk_window_destroy), NULL);
+            gtk_window_present(GTK_WINDOW(err));
+        } else {
+            // Aggiorna subito la lista visiva simulando un fetch
+            execute_fetch(live_pw);
+            gtk_window_destroy(GTK_WINDOW(dialog));
+        }
     }
 }
 
@@ -73,11 +134,8 @@ static void on_add_password_clicked(GtkWidget *widget, gpointer data) {
     gtk_window_set_transient_for(GTK_WINDOW(dialog), GTK_WINDOW(gtk_widget_get_root(widget)));
 
     GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-    gtk_widget_set_margin_top(vbox, 15);
-    gtk_widget_set_margin_bottom(vbox, 15);
-    gtk_widget_set_margin_start(vbox, 15);
-    gtk_widget_set_margin_end(vbox, 15);
-    
+    gtk_widget_set_margin_top(vbox, 15); gtk_widget_set_margin_bottom(vbox, 15);
+    gtk_widget_set_margin_start(vbox, 15); gtk_widget_set_margin_end(vbox, 15);
     gtk_window_set_child(GTK_WINDOW(dialog), vbox);
 
     GtkWidget *ent_svc = gtk_entry_new();
@@ -86,15 +144,28 @@ static void on_add_password_clicked(GtkWidget *widget, gpointer data) {
 
     GtkWidget *ent_pass = gtk_entry_new();
     gtk_entry_set_visibility(GTK_ENTRY(ent_pass), FALSE);
-    gtk_entry_set_placeholder_text(GTK_ENTRY(ent_pass), "Password");
+    gtk_entry_set_placeholder_text(GTK_ENTRY(ent_pass), "Password da cifrare");
     gtk_box_append(GTK_BOX(vbox), ent_pass);
+
+    GtkWidget *ent_master = NULL;
+    // Se usa la password, aggiungiamo dinamicamente il campo nel dialog
+    if (controller_is_using_password()) {
+        gtk_box_append(GTK_BOX(vbox), gtk_separator_new(GTK_ORIENTATION_HORIZONTAL));
+        
+        ent_master = gtk_entry_new();
+        gtk_entry_set_visibility(GTK_ENTRY(ent_master), FALSE);
+        gtk_entry_set_placeholder_text(GTK_ENTRY(ent_master), "Autorizza con Master Password");
+        gtk_box_append(GTK_BOX(vbox), ent_master);
+    }
 
     GtkWidget *btn_save = gtk_button_new_with_label("Cifra e Salva");
     g_object_set_data(G_OBJECT(btn_save), "svc", ent_svc);
     g_object_set_data(G_OBJECT(btn_save), "pass", ent_pass);
-    g_signal_connect(btn_save, "clicked", G_CALLBACK(on_actual_save), dialog);
+    g_object_set_data(G_OBJECT(btn_save), "master", ent_master); // Passato anche se è NULL
     
+    g_signal_connect(btn_save, "clicked", G_CALLBACK(on_actual_save), dialog);
     gtk_box_append(GTK_BOX(vbox), btn_save);
+    
     gtk_window_present(GTK_WINDOW(dialog));
 }
 
@@ -104,8 +175,8 @@ static void on_connect_clicked(GtkWidget *widget, gpointer data) {
     gtk_label_set_text(GTK_LABEL(status_connect), "Stabilendo tunnel mTLS sicuro...");
 
     if (controller_init_session() == 0) {
+        // Entra dritto nel vault senza fare controlli su entry inesistenti
         gtk_stack_set_visible_child_name(GTK_STACK(stack), "vault_page");
-        on_refresh_clicked(NULL, NULL);
     } else {
         gtk_label_set_text(GTK_LABEL(status_connect), "❌ Connessione fallita. Controlla il server.");
     }
@@ -116,14 +187,14 @@ static void on_key_ready() {
     gtk_stack_set_visible_child_name(GTK_STACK(stack), "connect_page");
 }
 
-static void on_password_unlock_clicked(GtkWidget *widget, gpointer data) {
+static void on_password_selected(GtkWidget *widget, gpointer data) {
     (void)widget; (void)data;
-    const char *password = gtk_editable_get_text(GTK_EDITABLE(password_entry)); 
     
-    if (controller_unlock_with_password(password) == 0) {
+    // Non recuperiamo e non passiamo nulla! Segnaliamo solo l'intento.
+    if (controller_set_crypto_password() == 0) {
         on_key_ready(); 
     } else {
-        gtk_label_set_text(GTK_LABEL(status_key), "[-] Errore nella derivazione della chiave.");
+        gtk_label_set_text(GTK_LABEL(status_key), "[-] Errore nell'impostazione metodo.");
     }
 }
 
@@ -135,10 +206,11 @@ static void on_usb_file_opened(GObject *source, GAsyncResult *res, gpointer data
     if (file) {
         char *path = g_file_get_path(file);
         
-        if (controller_unlock_with_usb(path) == 0) {
+        // Passiamo semplicemente il path al controller
+        if (controller_set_crypto_usb_path(path) == 0) {
             on_key_ready();
         } else {
-            gtk_label_set_text(GTK_LABEL(status_key), "[-] File chiave non valido o corrotto.");
+            gtk_label_set_text(GTK_LABEL(status_key), "[-] Impossibile accedere al file o file non valido.");
         }
         g_free(path); 
         g_object_unref(file);
@@ -160,7 +232,7 @@ static void on_usb_generate_save_response(GObject *source, GAsyncResult *res, gp
         char *path = g_file_get_path(file);
         
         if (controller_generate_new_usb_key(path) == 0) {
-            g_print("[+] Nuova chiave generata e caricata: %s\n", path);
+            g_print("[+] Nuova chiave generata e salvata: %s\n", path);
             on_key_ready(); 
         } else {
             g_warning("[-] Impossibile generare la chiave");
@@ -302,7 +374,10 @@ GtkWidget* create_intro_page() {
         logo_widget = gtk_image_new_from_icon_name("security-high-symbolic");
         gtk_image_set_pixel_size(GTK_IMAGE(logo_widget), 200);
     } else {
-        logo_widget = gtk_image_new_from_pixbuf(pixbuf);
+        // Usa il nuovo metodo raccomandato per GTK4 come suggerito prima
+        GdkTexture *texture = gdk_texture_new_for_pixbuf(pixbuf);
+        logo_widget = gtk_image_new_from_paintable(GDK_PAINTABLE(texture));
+        g_object_unref(texture);
         g_object_unref(pixbuf); 
     }
 
@@ -352,31 +427,27 @@ GtkWidget* create_key_select_page() {
     gtk_widget_set_valign(box, GTK_ALIGN_CENTER);
     
     GtkWidget *title = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(title), "<span size='large' weight='bold'>Passo 2: Configurazione Chiave</span>");
+    gtk_label_set_markup(GTK_LABEL(title), "<span size='large' weight='bold'>Passo 2: Metodo di Cifratura</span>");
     gtk_box_append(GTK_BOX(box), title);
-
-    password_entry = gtk_entry_new();
-    gtk_entry_set_visibility(GTK_ENTRY(password_entry), FALSE);
-    gtk_entry_set_placeholder_text(GTK_ENTRY(password_entry), "Master Password");
-    gtk_box_append(GTK_BOX(box), password_entry);
     
-    GtkWidget *btn_pw = gtk_button_new_with_label("Sblocca con Password");
-    g_signal_connect(btn_pw, "clicked", G_CALLBACK(on_password_unlock_clicked), NULL);
+    // Rimosso l'inserimento della password qui!
+    GtkWidget *btn_pw = gtk_button_new_with_label("Imposta Master Password (verrà richiesta all'uso)");
+    g_signal_connect(btn_pw, "clicked", G_CALLBACK(on_password_selected), NULL);
     gtk_box_append(GTK_BOX(box), btn_pw);
 
     GtkWidget *sep = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL);
     gtk_box_append(GTK_BOX(box), sep);
 
-    GtkWidget *btn_usb_load = gtk_button_new_with_label("Sblocca con USB esistente");
+    GtkWidget *btn_usb_load = gtk_button_new_with_label("Seleziona File Chiave (USB)");
     g_signal_connect(btn_usb_load, "clicked", G_CALLBACK(on_usb_load_clicked), NULL);
     gtk_box_append(GTK_BOX(box), btn_usb_load);
 
-    GtkWidget *btn_usb_gen = gtk_button_new_with_label("Genera Nuova Chiave su USB");
+    GtkWidget *btn_usb_gen = gtk_button_new_with_label("Genera Nuova Chiave su File/USB");
     gtk_widget_add_css_class(btn_usb_gen, "outline"); 
     g_signal_connect(btn_usb_gen, "clicked", G_CALLBACK(on_usb_generate_clicked), NULL);
     gtk_box_append(GTK_BOX(box), btn_usb_gen);
 
-    status_key = gtk_label_new("Seleziona un metodo di sblocco o crea una chiave");
+    status_key = gtk_label_new("Seleziona il metodo con cui cifrare/decifrare i dati");
     gtk_box_append(GTK_BOX(box), status_key);
     
     return box;
@@ -419,12 +490,13 @@ GtkWidget* create_vault_page() {
     gtk_widget_set_halign(action_bar, GTK_ALIGN_CENTER);
     
     GtkWidget *btn_add = gtk_button_new_with_label("Aggiungi Password");
-    GtkWidget *btn_refresh = gtk_button_new_with_label("Sincronizza");
+    GtkWidget *btn_refresh = gtk_button_new_with_label("Sincronizza / Sblocca");
     g_signal_connect(btn_refresh, "clicked", G_CALLBACK(on_refresh_clicked), NULL);
     g_signal_connect(btn_add, "clicked", G_CALLBACK(on_add_password_clicked), NULL);
     
     gtk_box_append(GTK_BOX(action_bar), btn_add);
     gtk_box_append(GTK_BOX(action_bar), btn_refresh);
+    
     gtk_box_append(GTK_BOX(box), action_bar);
     return box;
 }

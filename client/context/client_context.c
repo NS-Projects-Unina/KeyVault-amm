@@ -10,8 +10,9 @@ static char current_username[128] = ""; // Inizialmente vuoto
 static SSL *active_ssl = NULL;
 static int active_sockfd = -1;
 
-static unsigned char session_key[32]; // AES_KEY_LEN
-static int crypto_ready = 0;
+// --- Variabili per l'intento crittografico al posto della session_key fissa ---
+static CryptoMethod current_crypto_method = CRYPTO_METHOD_NONE;
+static char current_crypto_credential[512] = ""; 
 
 void client_context_set_server_ip(const char *ip) {
     if (ip && strlen(ip) > 0) {
@@ -19,14 +20,13 @@ void client_context_set_server_ip(const char *ip) {
     }
 }
 
-const char* client_context_get_server_ip() {return global_server_ip;}
+const char* client_context_get_server_ip() { return global_server_ip; }
 
-void client_context_set_server_port(int port) {global_server_port = port;}
-int client_context_get_server_port() {return global_server_port;}
+void client_context_set_server_port(int port) { global_server_port = port; }
+int client_context_get_server_port() { return global_server_port; }
 
 void client_context_set_ssl(SSL *ssl) { active_ssl = ssl; }
 SSL* client_context_get_ssl() { return active_ssl; }
-
 
 void client_context_set_sockfd(int fd) { active_sockfd = fd; }
 int client_context_get_sockfd() { return active_sockfd; }
@@ -41,11 +41,31 @@ const char* client_context_get_username() {
     return current_username;
 }
 
-
-
-void client_context_set_session_key(const unsigned char *key) {
-    memcpy(session_key, key, 32);
-    crypto_ready = 1;
+// --- Implementazione Gestione Intento Crittografico ---
+void client_context_set_crypto_method(CryptoMethod method, const char *credential) {
+    current_crypto_method = method;
+    if (credential) {
+        strncpy(current_crypto_credential, credential, sizeof(current_crypto_credential) - 1);
+        current_crypto_credential[sizeof(current_crypto_credential) - 1] = '\0';
+    } else {
+        current_crypto_credential[0] = '\0';
+    }
 }
-unsigned char* client_context_get_session_key() { return session_key; }
-int client_context_is_crypto_ready() { return crypto_ready; }
+
+CryptoMethod client_context_get_crypto_method() {
+    return current_crypto_method;
+}
+
+const char* client_context_get_crypto_credential() {
+    return current_crypto_credential;
+}
+
+int client_context_is_crypto_ready() {
+    // Se è PASSWORD, siamo pronti a prescindere (la password arriverà "live" dai popup)
+    if (current_crypto_method == CRYPTO_METHOD_PASSWORD) return 1;
+    
+    // Se è USB, dobbiamo anche avere un path valido salvato
+    if (current_crypto_method == CRYPTO_METHOD_USB && strlen(current_crypto_credential) > 0) return 1;
+    
+    return 0; // Altrimenti non siamo pronti
+}
